@@ -22,17 +22,17 @@ import (
 	// today" decision in the domain.
 	_ "time/tzdata"
 
-	"github.com/meu-auto/meu-auto-backend/db"
-	"github.com/meu-auto/meu-auto-backend/internal/identity"
-	"github.com/meu-auto/meu-auto-backend/internal/insight"
-	"github.com/meu-auto/meu-auto-backend/internal/maintenance"
-	"github.com/meu-auto/meu-auto-backend/internal/obligation"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/auth"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/config"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/database"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/logging"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/mailer"
-	"github.com/meu-auto/meu-auto-backend/internal/vehicle"
+	"github.com/simonscabello/meu-auto-backend/db"
+	"github.com/simonscabello/meu-auto-backend/internal/identity"
+	"github.com/simonscabello/meu-auto-backend/internal/insight"
+	"github.com/simonscabello/meu-auto-backend/internal/maintenance"
+	"github.com/simonscabello/meu-auto-backend/internal/obligation"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/auth"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/config"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/database"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/logging"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/mailer"
+	"github.com/simonscabello/meu-auto-backend/internal/vehicle"
 )
 
 const (

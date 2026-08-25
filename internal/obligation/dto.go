@@ -4,9 +4,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/meu-auto/meu-auto-backend/internal/obligation/db"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/civil"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/validate"
+	"github.com/simonscabello/meu-auto-backend/internal/obligation/db"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/civil"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/validate"
 )
 
 // Obligation kinds. Contract values (SPEC.md D-01). Portuguese because the terms carry a

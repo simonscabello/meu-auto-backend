@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/meu-auto/meu-auto-backend/internal/platform/civil"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/civil"
 )
 
 // Warranty thresholds — how far ahead a warranty starts warning.

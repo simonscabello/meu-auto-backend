@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/meu-auto/meu-auto-backend/internal/insight/db"
+	"github.com/simonscabello/meu-auto-backend/internal/insight/db"
 )
 
 // Repository holds this module's only two queries.

@@ -11,8 +11,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/meu-auto/meu-auto-backend/internal/platform/apperr"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/logging"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/apperr"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/logging"
 )
 
 const requestIDHeader = "X-Request-Id"

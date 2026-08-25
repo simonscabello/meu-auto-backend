@@ -6,13 +6,13 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/meu-auto/meu-auto-backend/internal/insight/db"
-	"github.com/meu-auto/meu-auto-backend/internal/maintenance"
-	"github.com/meu-auto/meu-auto-backend/internal/obligation"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/apperr"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/civil"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/httpx"
-	"github.com/meu-auto/meu-auto-backend/internal/vehicle"
+	"github.com/simonscabello/meu-auto-backend/internal/insight/db"
+	"github.com/simonscabello/meu-auto-backend/internal/maintenance"
+	"github.com/simonscabello/meu-auto-backend/internal/obligation"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/apperr"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/civil"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/httpx"
+	"github.com/simonscabello/meu-auto-backend/internal/vehicle"
 )
 
 // Ports onto the domain modules.

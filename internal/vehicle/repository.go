@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/meu-auto/meu-auto-backend/internal/vehicle/db"
+	"github.com/simonscabello/meu-auto-backend/internal/vehicle/db"
 )
 
 // Domain-level failures. Plain sentinels, not apperr: the service decides what the client

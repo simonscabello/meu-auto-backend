@@ -3,9 +3,9 @@ package insight
 import (
 	"time"
 
-	"github.com/meu-auto/meu-auto-backend/internal/insight/db"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/civil"
-	"github.com/meu-auto/meu-auto-backend/internal/vehicle"
+	"github.com/simonscabello/meu-auto-backend/internal/insight/db"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/civil"
+	"github.com/simonscabello/meu-auto-backend/internal/vehicle"
 )
 
 // Dashboard is the main screen in one response.

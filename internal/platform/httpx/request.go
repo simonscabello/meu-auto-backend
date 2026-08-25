@@ -9,7 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/meu-auto/meu-auto-backend/internal/platform/apperr"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/apperr"
 )
 
 // MaxBodyBytes caps request bodies. Every payload in this API is a handful of short

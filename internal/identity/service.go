@@ -10,12 +10,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/meu-auto/meu-auto-backend/internal/identity/db"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/apperr"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/auth"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/mailer"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/ratelimit"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/validate"
+	"github.com/simonscabello/meu-auto-backend/internal/identity/db"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/apperr"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/auth"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/mailer"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/ratelimit"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/validate"
 )
 
 // Rate limits.

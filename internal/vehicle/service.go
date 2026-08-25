@@ -8,10 +8,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/meu-auto/meu-auto-backend/internal/platform/apperr"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/civil"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/httpx"
-	"github.com/meu-auto/meu-auto-backend/internal/vehicle/db"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/apperr"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/civil"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/httpx"
+	"github.com/simonscabello/meu-auto-backend/internal/vehicle/db"
 )
 
 // PlanInitializer materialises the suggested maintenance plans for a newly created

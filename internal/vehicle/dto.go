@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/meu-auto/meu-auto-backend/internal/platform/civil"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/validate"
-	"github.com/meu-auto/meu-auto-backend/internal/vehicle/db"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/civil"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/validate"
+	"github.com/simonscabello/meu-auto-backend/internal/vehicle/db"
 )
 
 // Odometer reading sources. These are contract — the app switches on them, and a shipped

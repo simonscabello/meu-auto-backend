@@ -7,8 +7,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/meu-auto/meu-auto-backend/internal/platform/apperr"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/httpx"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/apperr"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/httpx"
 )
 
 type userIDCtxKey struct{}

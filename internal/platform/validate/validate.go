@@ -9,7 +9,7 @@ import (
 	"net/mail"
 	"strings"
 
-	"github.com/meu-auto/meu-auto-backend/internal/platform/apperr"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/apperr"
 )
 
 // Errors maps a field name to the reason it was rejected. Field names match the JSON keys

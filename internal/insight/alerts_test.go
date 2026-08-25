@@ -6,8 +6,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/meu-auto/meu-auto-backend/internal/maintenance"
-	"github.com/meu-auto/meu-auto-backend/internal/obligation"
+	"github.com/simonscabello/meu-auto-backend/internal/maintenance"
+	"github.com/simonscabello/meu-auto-backend/internal/obligation"
 )
 
 func p[T any](v T) *T { return &v }

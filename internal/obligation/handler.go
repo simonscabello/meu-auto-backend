@@ -6,9 +6,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/meu-auto/meu-auto-backend/internal/platform/apperr"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/auth"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/httpx"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/apperr"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/auth"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/httpx"
 )
 
 // Handler exposes the IPVA, licenciamento and seguro endpoints.

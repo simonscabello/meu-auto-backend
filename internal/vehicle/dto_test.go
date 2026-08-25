@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/meu-auto/meu-auto-backend/internal/platform/apperr"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/apperr"
 )
 
 var today = time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC)

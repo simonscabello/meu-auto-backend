@@ -6,8 +6,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/meu-auto/meu-auto-backend/internal/obligation/db"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/apperr"
+	"github.com/simonscabello/meu-auto-backend/internal/obligation/db"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/apperr"
 )
 
 // Both lookups join vehicle_ownerships, so the query itself is the authorisation — there

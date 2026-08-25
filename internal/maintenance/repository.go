@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/meu-auto/meu-auto-backend/internal/maintenance/db"
+	"github.com/simonscabello/meu-auto-backend/internal/maintenance/db"
 )
 
 var (

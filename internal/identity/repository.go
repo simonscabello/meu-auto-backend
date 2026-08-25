@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/meu-auto/meu-auto-backend/internal/identity/db"
+	"github.com/simonscabello/meu-auto-backend/internal/identity/db"
 )
 
 // Domain-level failures the repository reports.

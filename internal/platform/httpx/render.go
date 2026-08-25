@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/meu-auto/meu-auto-backend/internal/platform/logging"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/logging"
 )
 
 // JSON writes v as a JSON response with the given status code.

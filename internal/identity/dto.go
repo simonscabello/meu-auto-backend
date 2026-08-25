@@ -4,8 +4,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/meu-auto/meu-auto-backend/internal/identity/db"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/validate"
+	"github.com/simonscabello/meu-auto-backend/internal/identity/db"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/validate"
 )
 
 // Password bounds.

@@ -8,14 +8,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/meu-auto/meu-auto-backend/internal/identity"
-	"github.com/meu-auto/meu-auto-backend/internal/insight"
-	"github.com/meu-auto/meu-auto-backend/internal/maintenance"
-	"github.com/meu-auto/meu-auto-backend/internal/obligation"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/apperr"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/config"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/httpx"
-	"github.com/meu-auto/meu-auto-backend/internal/vehicle"
+	"github.com/simonscabello/meu-auto-backend/internal/identity"
+	"github.com/simonscabello/meu-auto-backend/internal/insight"
+	"github.com/simonscabello/meu-auto-backend/internal/maintenance"
+	"github.com/simonscabello/meu-auto-backend/internal/obligation"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/apperr"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/config"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/httpx"
+	"github.com/simonscabello/meu-auto-backend/internal/vehicle"
 )
 
 // readinessTimeout bounds the database check so a hung database produces a failed

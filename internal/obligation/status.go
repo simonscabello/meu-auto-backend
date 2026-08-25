@@ -3,7 +3,7 @@ package obligation
 import (
 	"time"
 
-	"github.com/meu-auto/meu-auto-backend/internal/platform/civil"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/civil"
 )
 
 // Status derivation for dated obligations.

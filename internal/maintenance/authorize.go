@@ -6,8 +6,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/meu-auto/meu-auto-backend/internal/maintenance/db"
-	"github.com/meu-auto/meu-auto-backend/internal/platform/apperr"
+	"github.com/simonscabello/meu-auto-backend/internal/maintenance/db"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/apperr"
 )
 
 // Everything in this module is reached through the vehicle that owns it. A plan id or a
