@@ -69,7 +69,9 @@ These come from `PRODUCT.md` and shape the schema directly:
 
 - **insight** — `GET /v1/vehicles/{id}/{dashboard,alerts,timeline}`. The read model.
 
-Next is MVP-2, starting with abastecimento — see the roadmap in `SPEC.md` section 10.
+Deploy is prepared but **not yet done** — `Dockerfile`, `.dockerignore`, `railway.toml` and [`docs/DEPLOY.md`](./docs/DEPLOY.md). The production image was built and exercised locally (23.7 MB distroless; `postgresql://` normalisation, embedded tzdata, migrations on boot, SIGTERM drain, and every config guard confirmed in the real container). The Railway project itself needs the owner's account.
+
+The biggest remaining gap is **no automated tests below the pure logic**: repositories, SQL semantics, handlers and authorisation have only ever been checked by hand. That is the thing to fix before MVP-2, which starts with abastecimento — a module that writes into `odometer_readings` and the cost totals, exactly where a silent regression would land. See the roadmap in `SPEC.md` section 10.
 
 **`internal/insight` is the only module allowed to depend on other modules.** The arrow is one-way and read-only: it calls the owning module's service and never re-derives a status. If you find yourself computing "overdue" inside insight, stop — the rule belongs to the module that owns the data, or the screen will drift from the domain behind it.
 

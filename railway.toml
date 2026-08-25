@@ -1,0 +1,29 @@
+# Configuracao de deploy no Railway.
+#
+# O Railway detecta o Dockerfile sozinho, mas declarar aqui evita que ele mude de ideia e
+# tente o Nixpacks depois de alguma alteracao no repositorio.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# O Railway so encaminha trafego para a nova versao depois que esta sonda responder, o que
+# transforma um deploy quebrado em um deploy que nao acontece — em vez de um que derruba a
+# API. Aponta para /healthz e nao /readyz de proposito: /readyz depende do banco, e uma
+# indisponibilidade momentanea do Postgres nao deve impedir a subida de um binario correto.
+healthcheckPath = "/healthz"
+
+# As migrations rodam no boot, antes do servidor escutar. Um minuto cobre com folga uma
+# migration que precise varrer tabela.
+healthcheckTimeout = 60
+
+# So reinicia quando o processo morre com erro. Config invalida faz o processo sair com
+# codigo 1 na hora, e o limite de tentativas impede um loop de reinicio infinito
+# escondendo o problema.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# Uma instancia. Nada aqui exige mais, e o trigger de cache do odometro e o advisory lock
+# das migrations ja tornam duas instancias seguras quando for a hora.
+numReplicas = 1

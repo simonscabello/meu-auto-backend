@@ -1,0 +1,27 @@
+# O estagio de build faz `COPY . .`. Sem esta lista, o .env com segredos reais entra na
+# camada de build — nao chega na imagem final por causa do multi-stage, mas fica no cache
+# de build e em qualquer registry que guarde estagios intermediarios.
+.env
+.env.*
+!.env.example
+
+# Nada disto e usado na compilacao, e cada arquivo aqui invalida o cache de build a toa.
+.git
+.github
+bin
+dist
+*.exe
+
+# Documentacao e ferramentas de teste nao entram no binario.
+docs
+test
+*.md
+!api/*.md
+
+# Artefatos locais
+coverage.*
+*.out
+.idea
+.vscode
+.DS_Store
+Thumbs.db
