@@ -55,6 +55,53 @@ These come from `PRODUCT.md` and shape the schema directly:
 - **The service history is a defensible record.** Dates, amounts and attachments are load-bearing for resale value and for disputes with a shop — favour append-with-audit over silent mutation, and think hard before allowing hard deletes.
 - **Offline operation is explicitly out of scope**, so no sync-conflict resolution is required today. The product record flags this as a real risk worth revisiting, since owners log things in parking garages and on roadsides. If it is ever reversed, it changes the API shape substantially — do not architect it away, but do not build for it unasked either.
 
+## Working in this repo
+
+This machine is Windows with Git Bash. Two things bite immediately:
+
+- **Go is installed but not on the Bash `PATH`.** Prefix your shell with
+  `export PATH="$PATH:/c/Program Files/Go/bin"` or nothing will build.
+- **Postgres runs on host port `5433`, not 5432** — the default was already taken by
+  another project on this machine. `docker-compose.yml` and `.env.example` reflect this.
+
+```bash
+export PATH="$PATH:/c/Program Files/Go/bin"
+
+cp .env.example .env                 # once; already points at 5433
+docker compose up -d                 # Postgres only, nothing else
+set -a && . ./.env && set +a && go run ./cmd/api
+
+go vet ./... && go test ./...        # full suite, seconds
+gofmt -l .                           # must print nothing
+```
+
+- **`go test -race` does not work here** — no gcc on this machine, and the race detector
+  needs cgo. CI runs it on Linux (`make test-race`). Locally, `go test ./...` is the check.
+- **sqlc runs through Docker**, so no local install is needed. Regenerate after touching
+  anything in `db/queries` or `db/migrations`:
+
+  ```bash
+  MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD:/src" -w /src sqlc/sqlc generate
+  ```
+
+  Then **read the generated struct.** sqlc infers nullability badly around UNIONs and
+  scalar subqueries — three bugs in this repo came from it, and each would have been a
+  runtime scan failure, not a compile error (SPEC.md D-09).
+
+- **Validate the API contract** after any DTO change:
+
+  ```bash
+  MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD:/spec" redocly/cli lint /spec/api/openapi.yaml
+  ```
+
+- **Build and run the production image** the way Railway will:
+
+  ```bash
+  docker build -t meu-auto-api:local .
+  ```
+
+  See `docs/DEPLOY.md` for the full environment it expects.
+
 ## State of the repo
 
 **MVP-1 complete (phases 0–5).** The foundation is in place (validated config, structured logging, typed domain errors, `apperr → HTTP`, pgx pool, embedded migrations applied on boot, `/healthz` and `/readyz`, CI), plus three domain modules:
@@ -63,11 +110,10 @@ These come from `PRODUCT.md` and shape the schema directly:
 - **vehicle** — `GET|POST /v1/vehicles`, `GET|PATCH|DELETE /v1/vehicles/{id}`, `GET|POST /v1/vehicles/{id}/odometer`, `DELETE /v1/odometer/{id}`. Ownership-based authorisation, the odometer monotonicity rule, keyset pagination.
 - **maintenance** — `GET|POST /v1/maintenance-items`, `GET|POST /v1/vehicles/{id}/maintenance-plans`, `PATCH|DELETE /v1/maintenance-plans/{id}`, `GET|POST /v1/vehicles/{id}/maintenance-records`, `GET|PATCH|DELETE /v1/maintenance-records/{id}`. A seeded catalogue, plans materialised automatically on vehicle creation, records with line items, and the due engine.
 
-**`internal/maintenance/due.go` is the most important file in this repo.** It is pure — no database, no clock, no context — and it holds the rule the whole product exists to serve. Change it only with its test suite in front of you, and keep it that way: the same function serves an HTTP request today and a notification cron later, and the two must never disagree.
-
 - **obligation** — `GET|POST /v1/vehicles/{id}/obligations`, `PATCH|DELETE /v1/obligations/{id}`, `GET|POST /v1/vehicles/{id}/seguros`, `PATCH|DELETE /v1/seguros/{id}`. IPVA and licenciamento share a table with an explicit `kind`; a seguro has its own, because it is a contract with a period rather than a dated debt.
-
 - **insight** — `GET /v1/vehicles/{id}/{dashboard,alerts,timeline}`. The read model.
+
+**`internal/maintenance/due.go` is the most important file in this repo.** It is pure — no database, no clock, no context — and it holds the rule the whole product exists to serve. Change it only with its test suite in front of you, and keep it that way: the same function serves an HTTP request today and a notification cron later, and the two must never disagree.
 
 Deploy is prepared but **not yet done** — `Dockerfile`, `.dockerignore`, `railway.toml` and [`docs/DEPLOY.md`](./docs/DEPLOY.md). The production image was built and exercised locally (23.7 MB distroless; `postgresql://` normalisation, embedded tzdata, migrations on boot, SIGTERM drain, and every config guard confirmed in the real container). The Railway project itself needs the owner's account.
 

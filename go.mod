@@ -1,4 +1,4 @@
-module github.com/meu-auto/meu-auto-backend
+module github.com/simonscabello/meu-auto-backend
 
 go 1.25.0
 
