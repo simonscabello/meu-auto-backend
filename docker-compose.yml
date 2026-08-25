@@ -1,0 +1,25 @@
+# Ambiente local. SO Postgres — a API roda no host, via `make run`.
+# Nao adicione servico aqui sem uma necessidade real (SPEC.md, secao 5).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: meuauto-postgres
+    environment:
+      POSTGRES_USER: meuauto
+      POSTGRES_PASSWORD: meuauto
+      POSTGRES_DB: meuauto
+    ports:
+      # 5433 no host, nao 5432: a porta padrao costuma ja estar tomada por outro projeto
+      # ou por um Postgres instalado na maquina. Dentro do container continua 5432.
+      - "5433:5432"
+    volumes:
+      - meuauto-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meuauto -d meuauto"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  meuauto-pgdata:

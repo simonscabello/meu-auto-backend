@@ -1,0 +1,1849 @@
+# Meu Auto — contrato da API v1.
+#
+# ESTE ARQUIVO É A FONTE DA VERDADE DO CONTRATO (SPEC.md D-03).
+#
+# Escrito à mão, não gerado do código Go. O spec é o contrato e o código o implementa — se
+# o spec fosse gerado do código, qualquer refatoração viraria mudança de contrato sem
+# ninguém perceber.
+#
+# OpenAPI 3.0.3, e não 3.1, por causa do consumidor: o app Flutter gera o client Dart daqui
+# com openapi-generator, que lida bem com `nullable: true` do 3.0 e mal com o
+# `type: [string, "null"]` do 3.1.
+#
+# ------------------------------------------------------------------------------------
+# COMPATIBILIDADE (SPEC.md D-01) — leia antes de editar
+#
+# Um app publicado NÃO pode ser forçado a atualizar. Versões antigas continuarão chamando
+# esta API. Dentro de /v1, só são permitidas mudanças ADITIVAS:
+#
+#   - Nunca remover campo. Nunca renomear campo. Nunca mudar tipo.
+#   - Nunca apertar validação de campo existente.
+#   - Campo novo sempre opcional, com default no servidor.
+#   - VALOR NOVO EM ENUM QUEBRA APP ANTIGO. Todo enum aqui é contrato. O cliente deve
+#     tratar valor desconhecido como um default seguro, nunca dar erro.
+#   - Códigos de erro nunca são renomeados nem reaproveitados.
+# ------------------------------------------------------------------------------------
+
+openapi: 3.0.3
+
+info:
+  title: Meu Auto API
+  version: "1.0.0"
+  description: |
+    API do Meu Auto — acompanhamento da vida útil de um veículo para o dono pessoa física
+    no Brasil.
+
+    **Convenções**
+
+    - Datas civis (dia de uma manutenção, vencimento de IPVA) são `YYYY-MM-DD`, sem hora e
+      sem fuso. Timestamps de auditoria (`created_at`, `updated_at`) são RFC 3339.
+    - Dinheiro é sempre **inteiro em centavos** (`*_cents`). Nunca float, nunca string.
+    - Distância é sempre inteiro em quilômetros.
+    - Mensagens de erro são pt-BR e podem ser exibidas ao usuário. O `code` é estável e em
+      inglês — é nele que o cliente decide comportamento, nunca na mensagem.
+    - `POST` de recurso aceita `id` gerado pelo cliente (UUIDv7). Reenviar a mesma
+      requisição é idempotente: retorna `200` com o recurso já criado em vez de `201`.
+    - Listas paginadas usam cursor opaco (`next_cursor`), nunca offset. `next_cursor: null`
+      é a última página. O cursor é emitido pelo servidor — não construa um.
+  contact:
+    name: Meu Auto
+  license:
+    name: Proprietary
+    url: https://meuauto.com.br
+
+servers:
+  - url: http://localhost:8080
+    description: Desenvolvimento local
+  - url: https://{host}
+    description: Ambiente hospedado
+    variables:
+      host:
+        default: api.meuauto.com.br
+
+tags:
+  - name: auth
+    description: Cadastro, sessão e recuperação de senha
+  - name: conta
+    description: A conta do usuário autenticado
+  - name: veiculos
+    description: Veículos e histórico de quilometragem
+  - name: manutencao
+    description: Catálogo, planos preventivos e manutenções realizadas
+  - name: prazos
+    description: IPVA, licenciamento e seguro
+  - name: telas
+    description: Read models — dashboard, alertas e linha do tempo
+  - name: operacao
+    description: Sondas de saúde
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ---------------------------------------------------------------- operação
+  /healthz:
+    get:
+      operationId: healthz
+      tags: [operacao]
+      summary: Liveness
+      description: |
+        O processo está vivo. Deliberadamente não toca em mais nada — uma queda do banco
+        não pode fazer a plataforma matar e reiniciar um processo saudável.
+      security: []
+      responses:
+        "200":
+          description: Processo no ar
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+
+  /readyz:
+    get:
+      operationId: readyz
+      tags: [operacao]
+      summary: Readiness
+      description: O processo consegue de fato atender — inclui um ping no banco.
+      security: []
+      responses:
+        "200":
+          description: Pronto
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ready }
+        "503":
+          description: Indisponível
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: unavailable }
+                  reason: { type: string, example: database }
+
+  # ---------------------------------------------------------------- auth
+  /v1/auth/register:
+    post:
+      operationId: register
+      tags: [auth]
+      summary: Criar conta
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterRequest" }
+      responses:
+        "201":
+          description: Conta criada e sessão iniciada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "409":
+          description: E-mail já cadastrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /v1/auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Entrar
+      description: |
+        A resposta de falha é **idêntica** para senha errada e e-mail inexistente, e o
+        tempo de resposta também. Distinguir os dois entregaria uma lista de e-mails
+        cadastrados.
+
+        Limitado por e-mail (10 tentativas / 15 min) e por IP (60 / 15 min).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Sessão iniciada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/auth/refresh:
+    post:
+      operationId: refreshSession
+      tags: [auth]
+      summary: Renovar a sessão
+      description: |
+        **Rotaciona** o refresh token: o token enviado é revogado e um novo é devolvido.
+        Guarde sempre o novo.
+
+        Apresentar um token já rotacionado é tratado como reúso — sinal de que ele foi
+        capturado — e **encerra todas as sessões do usuário**, obrigando um novo login.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefreshTokenRequest" }
+      responses:
+        "200":
+          description: Sessão renovada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Sair
+      description: Idempotente — um token desconhecido também responde `204`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefreshTokenRequest" }
+      responses:
+        "204": { description: Sessão encerrada }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /v1/auth/password-reset/request:
+    post:
+      operationId: requestPasswordReset
+      tags: [auth]
+      summary: Pedir link de redefinição de senha
+      description: |
+        Responde `202` **sempre**, exista o e-mail ou não. Se o endereço tem conta, um link
+        é enviado; o link vale 1 hora e só pode ser usado uma vez.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PasswordResetRequest" }
+      responses:
+        "202":
+          description: Pedido aceito (resposta idêntica exista ou não a conta)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/auth/password-reset/confirm:
+    post:
+      operationId: confirmPasswordReset
+      tags: [auth]
+      summary: Redefinir a senha
+      description: Redefinir **encerra todas as sessões ativas** do usuário.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PasswordResetConfirm" }
+      responses:
+        "204": { description: Senha redefinida }
+        "401":
+          description: Link inválido ou expirado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  # ---------------------------------------------------------------- conta
+  /v1/me:
+    get:
+      operationId: getMe
+      tags: [conta]
+      summary: Dados da conta
+      responses:
+        "200":
+          description: A conta
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      operationId: updateMe
+      tags: [conta]
+      summary: Atualizar a conta
+      description: |
+        Só o nome. **Trocar o e-mail não está disponível**: ele é o canal de recuperação da
+        conta, e mudá-lo exige verificação no endereço novo e aviso ao antigo.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateMeRequest" }
+      responses:
+        "200":
+          description: Conta atualizada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    delete:
+      operationId: deleteMe
+      tags: [conta]
+      summary: Excluir a conta
+      description: |
+        **Irreversível.** Apaga a conta e tudo que depende dela — veículos, histórico de
+        manutenção, quilometragem, prazos e apólices.
+
+        Exige a senha atual: um token roubado não pode bastar para isso.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DeleteMeRequest" }
+      responses:
+        "204": { description: Conta e dados excluídos }
+        "401":
+          description: Senha incorreta ou sessão inválida
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  # ---------------------------------------------------------------- veículos
+  /v1/vehicles:
+    get:
+      operationId: listVehicles
+      tags: [veiculos]
+      summary: Listar veículos
+      responses:
+        "200":
+          description: Os veículos do usuário
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Vehicle" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createVehicle
+      tags: [veiculos]
+      summary: Cadastrar veículo
+      description: |
+        Ao criar, o backend materializa automaticamente os planos de manutenção sugeridos
+        para o tipo do veículo. Todos são editáveis e desativáveis.
+
+        `current_mileage_km` vira a primeira leitura de odômetro, com a data de hoje.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateVehicleRequest" }
+      responses:
+        "200":
+          description: O `id` enviado já existia e pertence ao usuário — retentativa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Vehicle" }
+        "201":
+          description: Veículo cadastrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Vehicle" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /v1/vehicles/{vehicleId}:
+    parameters:
+      - $ref: "#/components/parameters/VehicleId"
+    get:
+      operationId: getVehicle
+      tags: [veiculos]
+      summary: Ver veículo
+      responses:
+        "200":
+          description: O veículo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Vehicle" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateVehicle
+      tags: [veiculos]
+      summary: Atualizar veículo
+      description: |
+        Campo ausente permanece como está. Um campo opcional **não pode ser limpo** por
+        aqui — enviar `null` é indistinguível de não enviar.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateVehicleRequest" }
+      responses:
+        "200":
+          description: Veículo atualizado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Vehicle" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    delete:
+      operationId: deleteVehicle
+      tags: [veiculos]
+      summary: Excluir veículo
+      description: |
+        Exclusão lógica: o veículo some das listas mas o histórico é preservado. O histórico
+        de serviço é o ativo do produto na revenda — um toque errado não pode destruí-lo.
+      responses:
+        "204": { description: Veículo excluído }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/vehicles/{vehicleId}/odometer:
+    parameters:
+      - $ref: "#/components/parameters/VehicleId"
+    get:
+      operationId: listOdometerReadings
+      tags: [veiculos]
+      summary: Histórico de quilometragem
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Uma página do histórico, mais recente primeiro
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OdometerPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    post:
+      operationId: createOdometerReading
+      tags: [veiculos]
+      summary: Registrar quilometragem
+      description: |
+        A leitura é validada contra seus **vizinhos no tempo**, não contra a quilometragem
+        atual — lançar hoje uma leitura de três meses atrás é legítimo, desde que fique
+        entre os registros ao redor dela.
+
+        Violação responde `422` com `code: "odometer_rollback"` e, em `details`, o vizinho
+        que causou o conflito. O cliente pode reenviar com `source: "correction"` para
+        forçar — painel de instrumentos realmente é trocado.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateOdometerReadingRequest" }
+      responses:
+        "201":
+          description: Leitura registrada, com o veículo já atualizado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateOdometerReadingResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422":
+          description: Dados inválidos, ou quilometragem inconsistente com o histórico
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                rollback:
+                  summary: Menor que o registro anterior
+                  value:
+                    error:
+                      code: odometer_rollback
+                      message: A quilometragem informada é menor que a do registro anterior.
+                      details:
+                        previous_mileage_km: 98200
+                        previous_occurred_on: "2026-08-10"
+                        submitted_mileage_km: 90000
+                        hint: 'Se o painel foi trocado ou o valor anterior estava errado, reenvie com source "correction".'
+
+  /v1/odometer/{readingId}:
+    parameters:
+      - name: readingId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    delete:
+      operationId: deleteOdometerReading
+      tags: [veiculos]
+      summary: Apagar uma leitura de quilometragem
+      description: |
+        Exclusão definitiva, ao contrário do veículo: uma leitura digitada errado é ruído,
+        não histórico, e deixá-la corromperia todo intervalo derivado dela.
+      responses:
+        "204": { description: Leitura apagada }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---------------------------------------------------------------- manutenção
+  /v1/maintenance-items:
+    get:
+      operationId: listMaintenanceItems
+      tags: [manutencao]
+      summary: Catálogo de manutenção
+      description: Itens globais mais os itens personalizados do próprio usuário.
+      parameters:
+        - name: vehicle_type
+          in: query
+          schema: { $ref: "#/components/schemas/VehicleType" }
+        - name: kind
+          in: query
+          schema: { $ref: "#/components/schemas/MaintenanceItemKind" }
+      responses:
+        "200":
+          description: O catálogo visível ao usuário
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/MaintenanceItem" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    post:
+      operationId: createMaintenanceItem
+      tags: [manutencao]
+      summary: Criar item personalizado
+      description: Visível apenas para quem criou. O `slug` é derivado do nome.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateMaintenanceItemRequest" }
+      responses:
+        "201":
+          description: Item criado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceItem" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /v1/vehicles/{vehicleId}/maintenance-plans:
+    parameters:
+      - $ref: "#/components/parameters/VehicleId"
+    get:
+      operationId: listMaintenancePlans
+      tags: [manutencao]
+      summary: Planos de manutenção, com o vencimento já calculado
+      description: |
+        Ordenado por urgência: vencido, vence em breve, sem baseline, em dia, sem
+        periodicidade.
+
+        `due_at_km`/`remaining_km` são `null` quando o plano não tem intervalo por
+        distância; `due_on`/`remaining_days` são `null` quando não tem intervalo por tempo.
+        `null` significa **essa dimensão não se aplica**, nunca zero.
+      responses:
+        "200":
+          description: Os planos do veículo
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/MaintenancePlan" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createMaintenancePlan
+      tags: [manutencao]
+      summary: Criar plano
+      description: |
+        Se nenhum intervalo for informado, os padrões do item no catálogo são usados —
+        criar um plano pode ser só nomear o item.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateMaintenancePlanRequest" }
+      responses:
+        "201":
+          description: Plano criado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenancePlanSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /v1/maintenance-plans/{planId}:
+    parameters:
+      - name: planId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      operationId: updateMaintenancePlan
+      tags: [manutencao]
+      summary: Atualizar plano
+      description: |
+        Qualquer edição marca o plano como `origin: "user"`, para que uma futura atualização
+        dos padrões sugeridos não sobrescreva a customização.
+
+        Para transformar o plano em um que só agrupa histórico e nunca vence, envie
+        `clear_intervals: true` — sem intervalos junto.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateMaintenancePlanRequest" }
+      responses:
+        "200":
+          description: Plano atualizado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenancePlanSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    delete:
+      operationId: deleteMaintenancePlan
+      tags: [manutencao]
+      summary: Desativar plano
+      description: Desativa em vez de apagar — o plano pode já ter histórico associado.
+      responses:
+        "204": { description: Plano desativado }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/vehicles/{vehicleId}/maintenance-records:
+    parameters:
+      - $ref: "#/components/parameters/VehicleId"
+    get:
+      operationId: listMaintenanceRecords
+      tags: [manutencao]
+      summary: Manutenções realizadas
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Uma página do histórico, mais recente primeiro
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceRecordPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    post:
+      operationId: createMaintenanceRecord
+      tags: [manutencao]
+      summary: Registrar manutenção
+      description: |
+        Um registro é o evento (data, quilometragem, oficina, valor total) com **uma ou
+        mais linhas de item**. É esse formato que faz uma "revisão dos 100.000 km"
+        funcionar: um evento, uma nota fiscal, e cada item zerando o próprio relógio.
+
+        Pelo menos um item é obrigatório — um registro sem item não zera relógio nenhum.
+        Use o item `personalizada` do catálogo para o que não tem nome.
+
+        A quilometragem informada gera uma leitura de odômetro e passa pela mesma validação
+        de consistência do endpoint de odômetro.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateMaintenanceRecordRequest" }
+      responses:
+        "200":
+          description: O `id` enviado já existia neste veículo — retentativa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceRecord" }
+        "201":
+          description: Manutenção registrada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceRecord" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422":
+          description: Dados inválidos, ou quilometragem inconsistente com o histórico
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/maintenance-records/{recordId}:
+    parameters:
+      - name: recordId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getMaintenanceRecord
+      tags: [manutencao]
+      summary: Ver manutenção
+      responses:
+        "200":
+          description: A manutenção, com suas linhas
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceRecord" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateMaintenanceRecord
+      tags: [manutencao]
+      summary: Atualizar manutenção
+      description: |
+        Altera data, quilometragem, oficina, valor e observação. **Não altera as linhas de
+        item** — trocar item a item exige decidir o que acontece com o relógio dos removidos.
+
+        Mudar data ou quilometragem move a leitura de odômetro gerada por este registro, e
+        passa pela mesma validação de consistência.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateMaintenanceRecordRequest" }
+      responses:
+        "200":
+          description: Manutenção atualizada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceRecord" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    delete:
+      operationId: deleteMaintenanceRecord
+      tags: [manutencao]
+      summary: Retratar manutenção
+      description: |
+        Exclusão lógica. A leitura de odômetro gerada por este registro é removida junto e o
+        relógio dos itens envolvidos volta ao registro anterior — um serviço retratado não
+        pode continuar alimentando o histórico com um número que ninguém sustenta.
+      responses:
+        "204": { description: Manutenção retratada }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---------------------------------------------------------------- prazos
+  /v1/vehicles/{vehicleId}/obligations:
+    parameters:
+      - $ref: "#/components/parameters/VehicleId"
+    get:
+      operationId: listObligations
+      tags: [prazos]
+      summary: IPVA e licenciamento
+      parameters:
+        - name: kind
+          in: query
+          schema: { $ref: "#/components/schemas/ObligationKind" }
+      responses:
+        "200":
+          description: Os débitos do veículo, vencimento mais recente primeiro
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Obligation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    post:
+      operationId: createObligation
+      tags: [prazos]
+      summary: Registrar IPVA ou licenciamento
+      description: Um por tipo por ano de referência — um segundo é duplicata, não um segundo tributo.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateObligationRequest" }
+      responses:
+        "201":
+          description: Débito registrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Obligation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /v1/obligations/{obligationId}:
+    parameters:
+      - name: obligationId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      operationId: updateObligation
+      tags: [prazos]
+      summary: Atualizar débito
+      description: |
+        Para desfazer um pagamento lançado por engano, envie `clear_payment: true` — sem
+        dados de pagamento junto.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateObligationRequest" }
+      responses:
+        "200":
+          description: Débito atualizado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Obligation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    delete:
+      operationId: deleteObligation
+      tags: [prazos]
+      summary: Apagar débito
+      responses:
+        "204": { description: Débito apagado }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/vehicles/{vehicleId}/seguros:
+    parameters:
+      - $ref: "#/components/parameters/VehicleId"
+    get:
+      operationId: listSeguros
+      tags: [prazos]
+      summary: Apólices de seguro
+      responses:
+        "200":
+          description: As apólices, vigência mais recente primeiro
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Seguro" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createSeguro
+      tags: [prazos]
+      summary: Registrar apólice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSeguroRequest" }
+      responses:
+        "201":
+          description: Apólice registrada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Seguro" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /v1/seguros/{seguroId}:
+    parameters:
+      - name: seguroId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      operationId: updateSeguro
+      tags: [prazos]
+      summary: Atualizar apólice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateSeguroRequest" }
+      responses:
+        "200":
+          description: Apólice atualizada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Seguro" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    delete:
+      operationId: deleteSeguro
+      tags: [prazos]
+      summary: Apagar apólice
+      responses:
+        "204": { description: Apólice apagada }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ---------------------------------------------------------------- telas
+  /v1/vehicles/{vehicleId}/dashboard:
+    parameters:
+      - $ref: "#/components/parameters/VehicleId"
+    get:
+      operationId: getDashboard
+      tags: [telas]
+      summary: A tela principal, em uma requisição
+      parameters:
+        - name: cost_months
+          in: query
+          description: Janela do resumo de custos, em meses.
+          schema: { type: integer, format: int32, minimum: 1, maximum: 120, default: 12 }
+      responses:
+        "200":
+          description: Veículo, odômetro, contagem de alertas e custos registrados
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dashboard" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/vehicles/{vehicleId}/alerts:
+    parameters:
+      - $ref: "#/components/parameters/VehicleId"
+    get:
+      operationId: listAlerts
+      tags: [telas]
+      summary: Tudo que precisa de ação, de todos os domínios
+      description: |
+        Manutenção, cuidado recorrente, garantia, IPVA, licenciamento e seguro na mesma
+        lista, ordenados por urgência.
+
+        Só entram itens **vencidos** ou **vencendo em breve**. Um plano sem baseline não é
+        alerta — é pedido de configuração, e o dashboard o conta separadamente em
+        `alerts.needs_baseline`.
+
+        `reference_type` e `reference_id` dizem para onde navegar ao tocar no alerta.
+      responses:
+        "200":
+          description: Os alertas do veículo
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Alert" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/vehicles/{vehicleId}/timeline:
+    parameters:
+      - $ref: "#/components/parameters/VehicleId"
+    get:
+      operationId: getTimeline
+      tags: [telas]
+      summary: Histórico unificado do veículo
+      description: |
+        Manutenções, leituras manuais de quilometragem e pagamentos de IPVA/licenciamento na
+        mesma linha do tempo, mais recente primeiro.
+
+        Leituras de odômetro geradas **por** uma manutenção não aparecem — apareceriam duas
+        vezes.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Uma página da linha do tempo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TimelinePage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Token de acesso obtido em `/v1/auth/login`, `/register` ou `/refresh`. Vale 15
+        minutos; renove com o refresh token antes de expirar.
+
+  parameters:
+    VehicleId:
+      name: vehicleId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      description: Tamanho da página. Valores fora da faixa são ajustados, não rejeitados.
+      schema: { type: integer, format: int32, minimum: 1, maximum: 200, default: 50 }
+    Cursor:
+      name: cursor
+      in: query
+      description: |
+        Cursor opaco devolvido em `next_cursor`. Repasse sem interpretar — o formato é
+        interno e pode mudar.
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: Autenticação necessária, ou sessão inválida/expirada
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: |
+        Recurso não encontrado.
+
+        Também é a resposta para um recurso que existe mas não pertence ao usuário: dizer
+        "você não pode ver isto" confirmaria que ele existe.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: Conflito com um recurso existente
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ValidationFailed:
+      description: |
+        Dados inválidos. `details.fields` traz **todos** os campos rejeitados de uma vez,
+        com a chave igual à do JSON enviado.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error:
+              code: validation_failed
+              message: Não foi possível criar a conta.
+              details:
+                fields:
+                  email: Informe um e-mail válido.
+                  password: A senha deve ter pelo menos 8 caracteres.
+    RateLimited:
+      description: Tentativas demais. Aguarde antes de tentar de novo.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    # ------------------------------------------------------------ erro
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { $ref: "#/components/schemas/ErrorCode" }
+            message:
+              type: string
+              description: Mensagem em pt-BR, exibível ao usuário.
+            details:
+              type: object
+              additionalProperties: true
+              description: |
+                Dados estruturados específicos do erro. Em `validation_failed` traz
+                `fields`; em `odometer_rollback`, o registro vizinho conflitante; em
+                `internal`, o `request_id` para suporte.
+
+    ErrorCode:
+      type: string
+      description: |
+        Identificador estável do erro. **É nele que o cliente decide comportamento**, nunca
+        na mensagem.
+
+        Valores podem ser acrescentados no futuro — trate um código desconhecido como falha
+        genérica, nunca como erro de parsing.
+      enum:
+        - validation_failed
+        - unauthorized
+        - forbidden
+        - not_found
+        - method_not_allowed
+        - conflict
+        - odometer_rollback
+        - rate_limited
+        - internal
+
+    # ------------------------------------------------------------ enums de domínio
+    VehicleType:
+      type: string
+      description: MVP-1 aceita apenas `car`.
+      enum: [car]
+
+    FuelType:
+      type: string
+      enum: [flex, gasolina, etanol, diesel, gnv, eletrico, hibrido]
+
+    OdometerSource:
+      type: string
+      description: |
+        Origem da leitura. O cliente só pode enviar `manual` ou `correction` — `maintenance`
+        e `abastecimento` são escritos pelos próprios módulos, e aceitá-los aqui deixaria
+        forjar uma leitura que se diz originada de um serviço.
+      enum: [manual, correction, maintenance, abastecimento]
+
+    MaintenanceItemKind:
+      type: string
+      description: |
+        `maintenance` é histórico de serviço; `care` é hábito recorrente (calibrar pneus,
+        lavar o carro). Ambos passam pelo mesmo motor de vencimento.
+      enum: [maintenance, care]
+
+    MaintenanceRecordKind:
+      type: string
+      description: |
+        `performed` é um serviço que aconteceu e pode ser comprovado. `declared` é o dono
+        afirmando de memória — o carro usado comprado com "última troca aos 95.000 km" e sem
+        recibo.
+      enum: [performed, declared]
+
+    MaintenancePlanOrigin:
+      type: string
+      description: |
+        `suggested` veio do catálogo no cadastro do veículo; `user` foi criado ou editado
+        pelo dono. Qualquer edição promove para `user`.
+      enum: [suggested, user]
+
+    MaintenanceStatus:
+      type: string
+      description: |
+        Estado de um plano. Calculado a cada leitura, nunca armazenado.
+
+        - `vencido` — algum limite foi ultrapassado.
+        - `vence_em_breve` — algum limite está dentro da antecedência configurada.
+        - `em_dia` — nada perto.
+        - `sem_baseline` — existe regra, mas nada foi registrado ainda. Não é alerta: é
+          pedido de configuração.
+        - `sem_periodicidade` — o plano agrupa histórico e nunca vence. Estado válido, não
+          dado faltando.
+      enum: [vencido, vence_em_breve, em_dia, sem_baseline, sem_periodicidade]
+
+    ObligationKind:
+      type: string
+      enum: [ipva, licenciamento]
+
+    ObligationStatus:
+      type: string
+      description: |
+        `pago` prevalece sobre a data — IPVA pago em atraso está pago, não vencido. Vencendo
+        **hoje** é `vence_em_breve`, não `vencido`: ainda há horas para pagar.
+      enum: [pago, vencido, vence_em_breve, pendente]
+
+    SeguroStatus:
+      type: string
+      description: |
+        `futuro` é uma renovação já contratada que ainda não entrou em vigor. `vencido`
+        significa que o carro está **sem cobertura**.
+      enum: [futuro, vigente, vence_em_breve, vencido]
+
+    AlertKind:
+      type: string
+      enum: [manutencao, cuidado, garantia, ipva, licenciamento, seguro]
+
+    AlertSeverity:
+      type: string
+      description: Só dois valores — um alerta é algo que pede ação.
+      enum: [vencido, vence_em_breve]
+
+    TimelineEntryKind:
+      type: string
+      enum: [manutencao, odometro, ipva, licenciamento]
+
+    # ------------------------------------------------------------ auth e conta
+    RegisterRequest:
+      type: object
+      required: [name, email, password]
+      properties:
+        name: { type: string, maxLength: 120 }
+        email: { type: string, format: email, maxLength: 254 }
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+          description: |
+            Mínimo 8 caracteres e nenhuma regra de composição, seguindo o NIST SP 800-63B —
+            exigir símbolo e dígito produz "Senha1!" e nada mais seguro.
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+
+    RefreshTokenRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token: { type: string }
+
+    PasswordResetRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+
+    PasswordResetConfirm:
+      type: object
+      required: [token, password]
+      properties:
+        token: { type: string }
+        password: { type: string, minLength: 8, maxLength: 128 }
+
+    UpdateMeRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 120 }
+
+    DeleteMeRequest:
+      type: object
+      required: [password]
+      properties:
+        password: { type: string }
+
+    User:
+      type: object
+      required: [id, name, email, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string, format: email }
+        created_at: { type: string, format: date-time }
+
+    Session:
+      type: object
+      required: [user, token_type, access_token, expires_at, refresh_token, refresh_expires_at]
+      properties:
+        user: { $ref: "#/components/schemas/User" }
+        token_type: { type: string, enum: [Bearer] }
+        access_token: { type: string }
+        expires_at: { type: string, format: date-time }
+        refresh_token:
+          type: string
+          description: Guarde com segurança. É rotacionado a cada `/auth/refresh`.
+        refresh_expires_at: { type: string, format: date-time }
+
+    # ------------------------------------------------------------ veículo
+    CreateVehicleRequest:
+      type: object
+      required: [brand, model]
+      properties:
+        id:
+          type: string
+          format: uuid
+          nullable: true
+          description: |
+            UUIDv7 gerado pelo cliente. Torna a requisição idempotente: reenviar depois de
+            uma queda de conexão devolve o mesmo veículo com `200` em vez de criar outro.
+        vehicle_type: { $ref: "#/components/schemas/VehicleType" }
+        brand: { type: string, maxLength: 120 }
+        model: { type: string, maxLength: 120 }
+        version: { type: string, nullable: true, maxLength: 120 }
+        manufacture_year: { type: integer, format: int32, nullable: true }
+        model_year:
+          type: integer
+          format: int32
+          nullable: true
+          description: Não pode ser anterior ao ano de fabricação. Teto é o ano atual + 1.
+        plate:
+          type: string
+          nullable: true
+          description: |
+            Aceita os dois formatos em circulação — `ABC1234` e Mercosul `ABC1D23`.
+            Separadores e caixa são normalizados; a resposta traz sempre em maiúsculas e sem
+            hífen.
+        renavam: { type: string, nullable: true, pattern: '^[0-9]{9,11}$' }
+        chassis:
+          type: string
+          nullable: true
+          description: 17 caracteres, sem as letras I, O e Q.
+        fuel_type: { $ref: "#/components/schemas/FuelType" }
+        color: { type: string, nullable: true, maxLength: 120 }
+        nickname: { type: string, nullable: true, maxLength: 120 }
+        current_mileage_km:
+          type: integer
+          format: int32
+          nullable: true
+          minimum: 0
+          description: Quilometragem de abertura. Vira a primeira leitura de odômetro, datada de hoje.
+
+    UpdateVehicleRequest:
+      type: object
+      description: Campo ausente permanece como está.
+      properties:
+        brand: { type: string, nullable: true, maxLength: 120 }
+        model: { type: string, nullable: true, maxLength: 120 }
+        version: { type: string, nullable: true, maxLength: 120 }
+        manufacture_year: { type: integer, format: int32, nullable: true }
+        model_year: { type: integer, format: int32, nullable: true }
+        plate: { type: string, nullable: true }
+        renavam: { type: string, nullable: true }
+        chassis: { type: string, nullable: true }
+        fuel_type: { $ref: "#/components/schemas/FuelType" }
+        color: { type: string, nullable: true, maxLength: 120 }
+        nickname: { type: string, nullable: true, maxLength: 120 }
+
+    Vehicle:
+      type: object
+      required:
+        [id, vehicle_type, brand, model, current_mileage_km, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        vehicle_type: { $ref: "#/components/schemas/VehicleType" }
+        brand: { type: string }
+        model: { type: string }
+        version: { type: string, nullable: true }
+        manufacture_year: { type: integer, format: int32, nullable: true }
+        model_year: { type: integer, format: int32, nullable: true }
+        plate: { type: string, nullable: true }
+        renavam: { type: string, nullable: true }
+        chassis: { type: string, nullable: true }
+        fuel_type: { type: string, nullable: true }
+        color: { type: string, nullable: true }
+        nickname: { type: string, nullable: true }
+        fipe_code: { type: string, nullable: true }
+        current_mileage_km:
+          type: integer
+          format: int32
+          description: |
+            Derivado do histórico de odômetro — a leitura de data mais recente, não a de
+            maior valor.
+        current_mileage_at:
+          type: string
+          format: date
+          nullable: true
+          description: Data da leitura que produziu `current_mileage_km`.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateOdometerReadingRequest:
+      type: object
+      required: [mileage_km]
+      properties:
+        id: { type: string, format: uuid, nullable: true }
+        mileage_km: { type: integer, format: int32, minimum: 0 }
+        occurred_on:
+          type: string
+          format: date
+          nullable: true
+          description: Padrão é hoje. Não pode estar no futuro.
+        source:
+          type: string
+          enum: [manual, correction]
+          description: |
+            Padrão `manual`. Use `correction` para forçar uma leitura que o servidor
+            rejeitou por inconsistência — painel trocado, ou valor anterior errado.
+        notes: { type: string, nullable: true, maxLength: 500 }
+
+    OdometerReading:
+      type: object
+      required: [id, vehicle_id, mileage_km, occurred_on, source, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        vehicle_id: { type: string, format: uuid }
+        mileage_km: { type: integer, format: int32 }
+        occurred_on: { type: string, format: date }
+        source: { $ref: "#/components/schemas/OdometerSource" }
+        notes: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    CreateOdometerReadingResponse:
+      type: object
+      required: [reading, vehicle]
+      properties:
+        reading: { $ref: "#/components/schemas/OdometerReading" }
+        vehicle:
+          allOf:
+            - $ref: "#/components/schemas/Vehicle"
+          description: O veículo já com a quilometragem atualizada — evita uma segunda requisição.
+
+    OdometerPage:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/OdometerReading" }
+        next_cursor: { type: string, nullable: true }
+
+    # ------------------------------------------------------------ manutenção
+    CreateMaintenanceItemRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 120 }
+        kind: { $ref: "#/components/schemas/MaintenanceItemKind" }
+        default_interval_km: { type: integer, format: int32, nullable: true, minimum: 1 }
+        default_interval_months: { type: integer, format: int32, nullable: true, minimum: 1 }
+        default_interval_days: { type: integer, format: int32, nullable: true, minimum: 1 }
+
+    MaintenanceItem:
+      type: object
+      required: [id, slug, name, kind, vehicle_type, is_custom]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        name: { type: string }
+        kind: { $ref: "#/components/schemas/MaintenanceItemKind" }
+        vehicle_type: { type: string, enum: [car, motorcycle, all] }
+        is_custom:
+          type: boolean
+          description: '`true` quando é um item criado por este usuário, não do catálogo global.'
+        default_interval_km: { type: integer, format: int32, nullable: true }
+        default_interval_months: { type: integer, format: int32, nullable: true }
+        default_interval_days: { type: integer, format: int32, nullable: true }
+
+    CreateMaintenancePlanRequest:
+      type: object
+      required: [maintenance_item_id]
+      properties:
+        id: { type: string, format: uuid, nullable: true }
+        maintenance_item_id: { type: string, format: uuid }
+        interval_km: { type: integer, format: int32, nullable: true, minimum: 1 }
+        interval_months: { type: integer, format: int32, nullable: true, minimum: 1 }
+        interval_days: { type: integer, format: int32, nullable: true, minimum: 1 }
+        alert_km: { type: integer, format: int32, nullable: true, minimum: 0 }
+        alert_days: { type: integer, format: int32, nullable: true, minimum: 0 }
+
+    UpdateMaintenancePlanRequest:
+      type: object
+      properties:
+        interval_km: { type: integer, format: int32, nullable: true, minimum: 1 }
+        interval_months: { type: integer, format: int32, nullable: true, minimum: 1 }
+        interval_days: { type: integer, format: int32, nullable: true, minimum: 1 }
+        alert_km: { type: integer, format: int32, nullable: true, minimum: 0 }
+        alert_days: { type: integer, format: int32, nullable: true, minimum: 0 }
+        clear_intervals:
+          type: boolean
+          description: |
+            Limpa os três intervalos, transformando o plano em um que só agrupa histórico e
+            nunca vence. Precisa de flag própria porque `null` já significa "não altere".
+            Não pode vir junto de um intervalo.
+
+    MaintenancePlanSummary:
+      type: object
+      description: O plano sem o estado calculado. Devolvido em criação e atualização.
+      required: [id, maintenance_item_id, alert_km, alert_days, origin]
+      properties:
+        id: { type: string, format: uuid }
+        maintenance_item_id: { type: string, format: uuid }
+        interval_km: { type: integer, format: int32, nullable: true }
+        interval_months: { type: integer, format: int32, nullable: true }
+        interval_days: { type: integer, format: int32, nullable: true }
+        alert_km: { type: integer, format: int32 }
+        alert_days: { type: integer, format: int32 }
+        origin: { $ref: "#/components/schemas/MaintenancePlanOrigin" }
+
+    MaintenancePlan:
+      type: object
+      description: O plano com o vencimento já calculado.
+      required:
+        [id, maintenance_item_id, item_slug, item_name, item_kind, alert_km, alert_days, origin, status]
+      properties:
+        id: { type: string, format: uuid }
+        maintenance_item_id: { type: string, format: uuid }
+        item_slug: { type: string }
+        item_name: { type: string }
+        item_kind: { $ref: "#/components/schemas/MaintenanceItemKind" }
+        interval_km: { type: integer, format: int32, nullable: true }
+        interval_months: { type: integer, format: int32, nullable: true }
+        interval_days: { type: integer, format: int32, nullable: true }
+        alert_km: { type: integer, format: int32 }
+        alert_days: { type: integer, format: int32 }
+        origin: { $ref: "#/components/schemas/MaintenancePlanOrigin" }
+        status: { $ref: "#/components/schemas/MaintenanceStatus" }
+        due_at_km:
+          type: integer
+          format: int32
+          nullable: true
+          description: '`null` quando o plano não tem intervalo por distância.'
+        due_on:
+          type: string
+          format: date
+          nullable: true
+          description: '`null` quando o plano não tem intervalo por tempo.'
+        remaining_km: { type: integer, format: int32, nullable: true }
+        remaining_days: { type: integer, format: int32, nullable: true }
+        last_occurred_on:
+          type: string
+          format: date
+          nullable: true
+          description: Data do último registro deste item. `null` quando `status` é `sem_baseline`.
+        last_mileage_km: { type: integer, format: int32, nullable: true }
+
+    MaintenanceRecordItemRequest:
+      type: object
+      required: [maintenance_item_id]
+      properties:
+        maintenance_item_id: { type: string, format: uuid }
+        description: { type: string, nullable: true }
+        part_brand: { type: string, nullable: true }
+        cost_cents: { type: integer, format: int64, nullable: true, minimum: 0 }
+        warranty_months: { type: integer, format: int32, nullable: true, minimum: 1 }
+        warranty_km: { type: integer, format: int32, nullable: true, minimum: 1 }
+
+    CreateMaintenanceRecordRequest:
+      type: object
+      required: [mileage_km, items]
+      properties:
+        id: { type: string, format: uuid, nullable: true }
+        occurred_on:
+          type: string
+          format: date
+          nullable: true
+          description: Padrão é hoje. Não pode estar no futuro.
+        mileage_km: { type: integer, format: int32, minimum: 0 }
+        kind: { $ref: "#/components/schemas/MaintenanceRecordKind" }
+        workshop_name: { type: string, nullable: true, maxLength: 120 }
+        total_cost_cents: { type: integer, format: int64, nullable: true, minimum: 0 }
+        notes: { type: string, nullable: true, maxLength: 500 }
+        items:
+          type: array
+          minItems: 1
+          maxItems: 20
+          description: |
+            Pelo menos um item. O mesmo item não pode aparecer duas vezes no mesmo registro.
+          items: { $ref: "#/components/schemas/MaintenanceRecordItemRequest" }
+
+    UpdateMaintenanceRecordRequest:
+      type: object
+      description: Não altera as linhas de item.
+      properties:
+        occurred_on: { type: string, format: date, nullable: true }
+        mileage_km: { type: integer, format: int32, nullable: true, minimum: 0 }
+        workshop_name: { type: string, nullable: true }
+        total_cost_cents: { type: integer, format: int64, nullable: true, minimum: 0 }
+        notes: { type: string, nullable: true }
+
+    MaintenanceRecordItem:
+      type: object
+      required: [id, maintenance_item_id, item_slug, item_name]
+      properties:
+        id: { type: string, format: uuid }
+        maintenance_item_id: { type: string, format: uuid }
+        item_slug: { type: string }
+        item_name: { type: string }
+        description: { type: string, nullable: true }
+        part_brand: { type: string, nullable: true }
+        cost_cents: { type: integer, format: int64, nullable: true }
+        warranty_months: { type: integer, format: int32, nullable: true }
+        warranty_km: { type: integer, format: int32, nullable: true }
+        warranty_until:
+          type: string
+          format: date
+          nullable: true
+          description: |
+            Derivado da data do registro mais os meses de garantia. Nunca armazenado — o
+            servidor calcula a cada leitura.
+        warranty_until_km:
+          type: integer
+          format: int32
+          nullable: true
+          description: Derivado da quilometragem do registro mais os quilômetros de garantia.
+
+    MaintenanceRecord:
+      type: object
+      required:
+        [id, vehicle_id, occurred_on, mileage_km, kind, total_cost_cents, items, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        vehicle_id: { type: string, format: uuid }
+        occurred_on: { type: string, format: date }
+        mileage_km: { type: integer, format: int32 }
+        kind: { $ref: "#/components/schemas/MaintenanceRecordKind" }
+        workshop_name: { type: string, nullable: true }
+        total_cost_cents: { type: integer, format: int64 }
+        notes: { type: string, nullable: true }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/MaintenanceRecordItem" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    MaintenanceRecordPage:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/MaintenanceRecord" }
+        next_cursor: { type: string, nullable: true }
+
+    # ------------------------------------------------------------ prazos
+    CreateObligationRequest:
+      type: object
+      required: [kind, reference_year, due_on]
+      properties:
+        id: { type: string, format: uuid, nullable: true }
+        kind: { $ref: "#/components/schemas/ObligationKind" }
+        reference_year:
+          type: integer
+          format: int32
+          description: Ano de referência do tributo. Teto é o ano atual + 1.
+        due_on:
+          type: string
+          format: date
+          description: Vencimento. **Pode** estar no futuro — normalmente está.
+        amount_cents: { type: integer, format: int64, nullable: true, minimum: 0 }
+        paid_on:
+          type: string
+          format: date
+          nullable: true
+          description: Data do pagamento. Não pode estar no futuro.
+        paid_amount_cents: { type: integer, format: int64, nullable: true, minimum: 0 }
+        notes: { type: string, nullable: true, maxLength: 500 }
+
+    UpdateObligationRequest:
+      type: object
+      properties:
+        due_on: { type: string, format: date, nullable: true }
+        amount_cents: { type: integer, format: int64, nullable: true, minimum: 0 }
+        paid_on: { type: string, format: date, nullable: true }
+        paid_amount_cents: { type: integer, format: int64, nullable: true, minimum: 0 }
+        notes: { type: string, nullable: true }
+        clear_payment:
+          type: boolean
+          description: |
+            Marca o débito como não pago, desfazendo um lançamento feito por engano. Precisa
+            de flag própria porque `null` já significa "não altere". Não pode vir junto de
+            dados de pagamento.
+
+    Obligation:
+      type: object
+      required:
+        [id, vehicle_id, kind, reference_year, due_on, status, remaining_days, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        vehicle_id: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/ObligationKind" }
+        reference_year: { type: integer, format: int32 }
+        due_on: { type: string, format: date }
+        amount_cents: { type: integer, format: int64, nullable: true }
+        paid_on: { type: string, format: date, nullable: true }
+        paid_amount_cents: { type: integer, format: int64, nullable: true }
+        notes: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/ObligationStatus" }
+        remaining_days:
+          type: integer
+          description: |
+            Dias até o vencimento; negativo quando já passou. Devolvido mesmo quando pago,
+            para a tela poder dizer "pago com 3 dias de atraso".
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateSeguroRequest:
+      type: object
+      required: [insurer_name, starts_on, ends_on]
+      properties:
+        id: { type: string, format: uuid, nullable: true }
+        insurer_name: { type: string, maxLength: 120 }
+        policy_number: { type: string, nullable: true, maxLength: 120 }
+        starts_on: { type: string, format: date }
+        ends_on:
+          type: string
+          format: date
+          description: Não pode ser anterior a `starts_on`.
+        premium_cents: { type: integer, format: int64, nullable: true, minimum: 0 }
+        emergency_phone:
+          type: string
+          nullable: true
+          maxLength: 32
+          description: |
+            O 0800 da seguradora. Só o tamanho é validado — formato de telefone brasileiro
+            varia demais, e rejeitar um número que o dono consegue discar seria pior que
+            guardar um estranho.
+        broker_name: { type: string, nullable: true, maxLength: 120 }
+        broker_phone: { type: string, nullable: true, maxLength: 32 }
+        notes: { type: string, nullable: true, maxLength: 500 }
+
+    UpdateSeguroRequest:
+      type: object
+      properties:
+        insurer_name: { type: string, nullable: true, maxLength: 120 }
+        policy_number: { type: string, nullable: true }
+        starts_on: { type: string, format: date, nullable: true }
+        ends_on: { type: string, format: date, nullable: true }
+        premium_cents: { type: integer, format: int64, nullable: true, minimum: 0 }
+        emergency_phone: { type: string, nullable: true }
+        broker_name: { type: string, nullable: true }
+        broker_phone: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+
+    Seguro:
+      type: object
+      required:
+        [id, vehicle_id, insurer_name, starts_on, ends_on, status, remaining_days, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        vehicle_id: { type: string, format: uuid }
+        insurer_name: { type: string }
+        policy_number: { type: string, nullable: true }
+        starts_on: { type: string, format: date }
+        ends_on: { type: string, format: date }
+        premium_cents: { type: integer, format: int64, nullable: true }
+        emergency_phone: { type: string, nullable: true }
+        broker_name: { type: string, nullable: true }
+        broker_phone: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/SeguroStatus" }
+        remaining_days:
+          type: integer
+          description: |
+            Dias até o fim da vigência; negativo quando já acabou. Para uma apólice `futuro`,
+            conta até o **início**.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    # ------------------------------------------------------------ telas
+    Alert:
+      type: object
+      required: [kind, severity, title, reference_type, reference_id]
+      properties:
+        kind: { $ref: "#/components/schemas/AlertKind" }
+        severity: { $ref: "#/components/schemas/AlertSeverity" }
+        title: { type: string }
+        subtitle: { type: string, nullable: true }
+        due_on: { type: string, format: date, nullable: true }
+        due_at_km: { type: integer, format: int32, nullable: true }
+        remaining_days: { type: integer, format: int32, nullable: true }
+        remaining_km: { type: integer, format: int32, nullable: true }
+        reference_type:
+          type: string
+          enum: [maintenance_plan, maintenance_record, obligation, seguro]
+          description: Para onde navegar ao tocar no alerta.
+        reference_id: { type: string, format: uuid }
+
+    Dashboard:
+      type: object
+      required: [vehicle, odometer, alerts, costs]
+      properties:
+        vehicle:
+          type: object
+          required: [id, brand, model]
+          properties:
+            id: { type: string, format: uuid }
+            brand: { type: string }
+            model: { type: string }
+            version: { type: string, nullable: true }
+            nickname: { type: string, nullable: true }
+            plate: { type: string, nullable: true }
+        odometer:
+          type: object
+          required: [current_km]
+          properties:
+            current_km: { type: integer, format: int32 }
+            recorded_on: { type: string, format: date, nullable: true }
+        alerts:
+          type: object
+          required: [overdue, due_soon, needs_baseline, items]
+          properties:
+            overdue: { type: integer }
+            due_soon: { type: integer }
+            needs_baseline:
+              type: integer
+              description: |
+                Planos cujo item nunca foi registrado, então não há de onde medir. É pedido
+                de configuração, não prazo — por isso é contado aqui e **não** aparece em
+                `items` nem em `/alerts`.
+            items:
+              type: array
+              description: Apenas os mais urgentes. A lista completa está em `/alerts`.
+              items: { $ref: "#/components/schemas/Alert" }
+        costs:
+          type: object
+          required:
+            [period_months, since, maintenance_cents, obligations_cents, seguro_cents, tracked_cents, tracked_categories]
+          description: |
+            **Não é o custo de rodar o veículo.** Abastecimento e despesas avulsas não
+            existem no MVP-1, então `tracked_cents` é a soma apenas do que está listado em
+            `tracked_categories`. Rotule na interface como "custo registrado", nunca como
+            "custo total".
+          properties:
+            period_months: { type: integer, format: int32 }
+            since: { type: string, format: date }
+            maintenance_cents: { type: integer, format: int64 }
+            obligations_cents: { type: integer, format: int64 }
+            seguro_cents: { type: integer, format: int64 }
+            tracked_cents: { type: integer, format: int64 }
+            tracked_categories:
+              type: array
+              items: { type: string }
+
+    TimelineEntry:
+      type: object
+      required: [kind, id, occurred_on]
+      properties:
+        kind: { $ref: "#/components/schemas/TimelineEntryKind" }
+        id:
+          type: string
+          format: uuid
+          description: Id do recurso de origem — a manutenção, a leitura ou o débito.
+        occurred_on: { type: string, format: date }
+        title:
+          type: string
+          nullable: true
+          description: |
+            Para uma manutenção, os itens do registro separados por vírgula. `null` nos
+            demais tipos — a interface monta o rótulo a partir de `kind`.
+        subtitle:
+          type: string
+          nullable: true
+          description: |
+            Oficina numa manutenção, origem numa leitura de odômetro, ano de referência num
+            débito.
+        amount_cents:
+          type: integer
+          format: int64
+          nullable: true
+          description: '`null` numa leitura de odômetro — não envolve dinheiro.'
+        mileage_km:
+          type: integer
+          format: int32
+          nullable: true
+          description: '`null` num pagamento de tributo — não envolve quilometragem.'
+
+    TimelinePage:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/TimelineEntry" }
+        next_cursor: { type: string, nullable: true }

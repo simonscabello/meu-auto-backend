@@ -1,0 +1,22 @@
+# Build output
+/bin/
+/dist/
+meu-auto-api
+meu-auto-api.exe
+
+# Environment — never commit real secrets
+.env
+.env.local
+*.env
+!.env.example
+
+# Go
+*.test
+*.out
+coverage.*
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

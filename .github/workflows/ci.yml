@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Integration tests talk to a real Postgres. sqlc guarantees types, not semantics —
+    # only a real database catches a wrong join or a violated constraint (SPEC.md D-09).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: meuauto
+          POSTGRES_PASSWORD: meuauto
+          POSTGRES_DB: meuauto_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U meuauto"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://meuauto:meuauto@localhost:5432/meuauto_test?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Verify go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build
+        run: CGO_ENABLED=0 go build -trimpath ./...

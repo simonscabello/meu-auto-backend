@@ -1,0 +1,147 @@
+# sqlc gera o acesso a dados a partir das queries em db/queries.
+#
+# Um pacote gerado POR MODULO, nao um pacote compartilhado: e o que impede um modulo de
+# alcancar as tabelas de outro sem passar pelo service dele (SPEC.md secao 5).
+#
+# O schema apontado e o diretorio de migrations — sqlc le as migrations e deriva os tipos
+# delas, entao o schema nunca fica fora de sincronia com o codigo gerado.
+#
+# Os blocos sao repetidos por modulo. O alias YAML compartilha so a lista de overrides de
+# tipo, que precisa ser identica em todos os modulos.
+
+version: "2"
+
+sql:
+  - engine: postgresql
+    schema: db/migrations
+    queries: db/queries/identity
+    gen:
+      go:
+        package: db
+        out: internal/identity/db
+        sql_package: pgx/v5
+        emit_json_tags: false # DTO e escrito a mao, nunca derivado do banco (SPEC.md D-02)
+        emit_pointers_for_null_types: true
+        emit_empty_slices: true
+
+        # Sem estes overrides o codigo gerado usa pgtype.UUID e pgtype.Timestamptz, e cada
+        # metodo do repositorio vira uma conversao de ida e volta. Com eles, o tipo gerado
+        # ja e o tipo que o dominio usa.
+        overrides: &pgtypes
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: uuid
+            nullable: true
+            go_type:
+              import: github.com/google/uuid
+              type: UUID
+              pointer: true
+          - db_type: timestamptz
+            go_type: time.Time
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              type: time.Time
+              pointer: true
+          # Datas civis (occurred_on, current_mileage_at) sao time.Time, nao pgtype.Date.
+          - db_type: date
+            go_type: time.Time
+          - db_type: date
+            nullable: true
+            go_type:
+              type: time.Time
+              pointer: true
+
+  - engine: postgresql
+    schema: db/migrations
+    queries: db/queries/vehicle
+    gen:
+      go:
+        package: db
+        out: internal/vehicle/db
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_pointers_for_null_types: true
+        emit_empty_slices: true
+        overrides: *pgtypes
+
+  - engine: postgresql
+    schema: db/migrations
+    queries: db/queries/maintenance
+    gen:
+      go:
+        package: db
+        out: internal/maintenance/db
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_pointers_for_null_types: true
+        emit_empty_slices: true
+        overrides: *pgtypes
+
+  - engine: postgresql
+    schema: db/migrations
+    queries: db/queries/obligation
+    gen:
+      go:
+        package: db
+        out: internal/obligation/db
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_pointers_for_null_types: true
+        emit_empty_slices: true
+        overrides: *pgtypes
+
+  - engine: postgresql
+    schema: db/migrations
+    queries: db/queries/insight
+    gen:
+      go:
+        package: db
+        out: internal/insight/db
+        sql_package: pgx/v5
+        emit_json_tags: false
+        emit_pointers_for_null_types: true
+        emit_empty_slices: true
+
+        # Este bloco NAO usa o alias *pgtypes porque precisa de overrides por coluna.
+        #
+        # A inferencia de nulidade do sqlc num UNION segue a PRIMEIRA perna. No timeline as
+        # outras pernas selecionam NULL nessas colunas, entao sem estes overrides o struct
+        # gerado usaria int64/int32 e toda linha de odometro ou de obrigacao falharia no
+        # scan em runtime. Cast no SQL nao resolve — foi tentado.
+        overrides:
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: uuid
+            nullable: true
+            go_type:
+              import: github.com/google/uuid
+              type: UUID
+              pointer: true
+          - db_type: timestamptz
+            go_type: time.Time
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              type: time.Time
+              pointer: true
+          - db_type: date
+            go_type: time.Time
+          - db_type: date
+            nullable: true
+            go_type:
+              type: time.Time
+              pointer: true
+
+          - column: entries.title
+            go_type:
+              type: string
+              pointer: true
+          - column: entries.amount_cents
+            go_type:
+              type: int64
+              pointer: true
+          - column: entries.mileage_km
+            go_type:
+              type: int32
+              pointer: true
