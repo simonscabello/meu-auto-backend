@@ -1,0 +1,15 @@
+{
+  "body": {
+    "error": {
+      "code": "string",
+      "details": {
+        "hint": "string",
+        "previous_mileage_km": "number",
+        "previous_occurred_on": "string",
+        "submitted_mileage_km": "number"
+      },
+      "message": "string"
+    }
+  },
+  "status": 422
+}

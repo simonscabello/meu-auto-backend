@@ -1,0 +1,9 @@
+{
+  "body": {
+    "created_at": "string",
+    "email": "string",
+    "id": "string",
+    "name": "string"
+  },
+  "status": 200
+}

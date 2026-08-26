@@ -1,0 +1,23 @@
+{
+  "body": {
+    "brand": "string",
+    "chassis": "string",
+    "color": "string",
+    "created_at": "string",
+    "current_mileage_at": "string",
+    "current_mileage_km": "number",
+    "fipe_code": "null",
+    "fuel_type": "string",
+    "id": "string",
+    "manufacture_year": "number",
+    "model": "string",
+    "model_year": "number",
+    "nickname": "string",
+    "plate": "string",
+    "renavam": "string",
+    "updated_at": "string",
+    "vehicle_type": "string",
+    "version": "string"
+  },
+  "status": 201
+}

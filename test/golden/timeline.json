@@ -1,0 +1,17 @@
+{
+  "body": {
+    "data": [
+      {
+        "amount_cents": "null|number",
+        "id": "string",
+        "kind": "string",
+        "mileage_km": "number",
+        "occurred_on": "string",
+        "subtitle": "string",
+        "title": "null|string"
+      }
+    ],
+    "next_cursor": "null"
+  },
+  "status": 200
+}

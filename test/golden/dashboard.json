@@ -1,0 +1,47 @@
+{
+  "body": {
+    "alerts": {
+      "due_soon": "number",
+      "items": [
+        {
+          "due_at_km": "null|number",
+          "due_on": "string",
+          "kind": "string",
+          "reference_id": "string",
+          "reference_type": "string",
+          "remaining_days": "number",
+          "remaining_km": "null|number",
+          "severity": "string",
+          "subtitle": "null|string",
+          "title": "string"
+        }
+      ],
+      "needs_baseline": "number",
+      "overdue": "number"
+    },
+    "costs": {
+      "maintenance_cents": "number",
+      "obligations_cents": "number",
+      "period_months": "number",
+      "seguro_cents": "number",
+      "since": "string",
+      "tracked_categories": [
+        "string"
+      ],
+      "tracked_cents": "number"
+    },
+    "odometer": {
+      "current_km": "number",
+      "recorded_on": "string"
+    },
+    "vehicle": {
+      "brand": "string",
+      "id": "string",
+      "model": "string",
+      "nickname": "string",
+      "plate": "string",
+      "version": "string"
+    }
+  },
+  "status": 200
+}

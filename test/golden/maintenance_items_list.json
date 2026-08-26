@@ -1,0 +1,18 @@
+{
+  "body": {
+    "data": [
+      {
+        "default_interval_days": "null|number",
+        "default_interval_km": "null|number",
+        "default_interval_months": "null|number",
+        "id": "string",
+        "is_custom": "boolean",
+        "kind": "string",
+        "name": "string",
+        "slug": "string",
+        "vehicle_type": "string"
+      }
+    ]
+  },
+  "status": 200
+}

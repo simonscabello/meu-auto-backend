@@ -15,12 +15,16 @@ import (
 const listVehicleTimeline = `-- name: ListVehicleTimeline :many
 
 WITH entries AS (
-    -- The explicit casts and the CASE wrappers are not decoration. sqlc infers a UNION
-    -- column's nullability from the FIRST branch, and here that branch has NOT NULL
-    -- columns while the others select NULL. Without these, the generated struct would use
-    -- int64/int32 and every odometer or obligation row would fail to scan at runtime —
-    -- exactly the class of bug SPEC.md D-09 warns about (sqlc guarantees types, not
-    -- semantics). The string_agg cast is for the same reason: untyped, it generates []byte.
+    -- NULLABILITY WARNING (SPEC.md D-09: sqlc guarantees types, not semantics).
+    --
+    -- sqlc infers a UNION column's nullability from the FIRST branch. This branch has NOT
+    -- NULL columns where the branches below select NULL, so the generated struct would use
+    -- int64/int32 and every odometer or obligation row would fail to scan at runtime.
+    -- Casting in SQL does not fix it — that was tried. What fixes it is the per-column
+    -- override on entries.title / amount_cents / mileage_km in sqlc.yaml.
+    --
+    -- If you add a branch to this UNION with a column that can be NULL, check the
+    -- generated struct.
     SELECT 'manutencao'::text AS kind,
            r.id,
            r.occurred_on,
@@ -28,10 +32,10 @@ WITH entries AS (
            (SELECT string_agg(i.name, ', ' ORDER BY i.name)
               FROM maintenance_record_items ri
               JOIN maintenance_items i ON i.id = ri.maintenance_item_id
-             WHERE ri.maintenance_record_id = r.id)::text  AS title,
-           r.workshop_name                                 AS subtitle,
-           (CASE WHEN TRUE THEN r.total_cost_cents END)::bigint  AS amount_cents,
-           (CASE WHEN TRUE THEN r.mileage_km END)::integer       AS mileage_km
+             WHERE ri.maintenance_record_id = r.id) AS title,
+           r.workshop_name                          AS subtitle,
+           r.total_cost_cents                       AS amount_cents,
+           r.mileage_km                             AS mileage_km
     FROM maintenance_records r
     WHERE r.vehicle_id = $5
       AND r.deleted_at IS NULL

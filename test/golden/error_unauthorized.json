@@ -1,0 +1,9 @@
+{
+  "body": {
+    "error": {
+      "code": "string",
+      "message": "string"
+    }
+  },
+  "status": 401
+}

@@ -182,15 +182,24 @@ func (s *Service) Refresh(ctx context.Context, refreshToken, userAgent string) (
 		return Session{}, apperr.Internal(err)
 	}
 
-	// Reuse detection. A token that was already rotated out is being presented again,
-	// which means it was captured: the legitimate client holds the successor. There is no
-	// way to tell attacker from victim, so every session for the user is ended and both
-	// are made to sign in again.
 	if stored.RevokedAt != nil {
+		// A token revoked on purpose — a logout, a password reset, an earlier reuse sweep —
+		// is simply dead. Replaying one says nothing about anybody holding a copy, and the
+		// app replays them routinely: a logout that times out on a bad connection gets
+		// retried. Ending every session over that would sign the owner out of their other
+		// devices for using the product normally.
+		if !revokedByRotation(stored.RevokedReason) {
+			return Session{}, errInvalidSession()
+		}
+
+		// Reuse detection. A token that was already *rotated* out is being presented again,
+		// which means it was captured: the legitimate client holds the successor. There is
+		// no way to tell attacker from victim, so every session for the user is ended and
+		// both are made to sign in again.
 		s.log.Warn("refresh token reuse detected, revoking all sessions",
 			slog.String("user_id", stored.UserID.String()))
 
-		if err := s.repo.RevokeAllUserRefreshTokens(ctx, stored.UserID); err != nil {
+		if err := s.repo.RevokeAllUserRefreshTokens(ctx, stored.UserID, revokeReasonReuse); err != nil {
 			return Session{}, apperr.Internal(err)
 		}
 		return Session{}, errInvalidSession()
@@ -251,10 +260,19 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 		return apperr.Internal(err)
 	}
 
-	if err := s.repo.RevokeRefreshToken(ctx, stored.ID); err != nil {
+	if err := s.repo.RevokeRefreshTokenOnLogout(ctx, stored.ID); err != nil {
 		return apperr.Internal(err)
 	}
 	return nil
+}
+
+// revokedByRotation reports whether a revoked token was rotated out — the only revocation
+// whose replay means somebody has a copy.
+//
+// A missing reason is read as a rotation. The CHECK constraint in migration 000008 makes
+// that impossible, and if it ever happens anyway the safe reading is the suspicious one.
+func revokedByRotation(reason *string) bool {
+	return reason == nil || *reason == revokeReasonRotation
 }
 
 // RequestPasswordReset sends a reset link if the address has an account.

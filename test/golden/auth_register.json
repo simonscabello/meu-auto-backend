@@ -1,0 +1,16 @@
+{
+  "body": {
+    "access_token": "string",
+    "expires_at": "string",
+    "refresh_expires_at": "string",
+    "refresh_token": "string",
+    "token_type": "string",
+    "user": {
+      "created_at": "string",
+      "email": "string",
+      "id": "string",
+      "name": "string"
+    }
+  },
+  "status": 201
+}

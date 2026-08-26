@@ -1,0 +1,16 @@
+{
+  "body": {
+    "error": {
+      "code": "string",
+      "details": {
+        "fields": {
+          "brand": "string",
+          "model": "string",
+          "plate": "string"
+        }
+      },
+      "message": "string"
+    }
+  },
+  "status": 422
+}

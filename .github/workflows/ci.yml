@@ -9,25 +9,14 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    # Integration tests talk to a real Postgres. sqlc guarantees types, not semantics —
-    # only a real database catches a wrong join or a violated constraint (SPEC.md D-09).
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: meuauto
-          POSTGRES_PASSWORD: meuauto
-          POSTGRES_DB: meuauto_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U meuauto"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-
-    env:
-      DATABASE_URL: postgres://meuauto:meuauto@localhost:5432/meuauto_test?sslmode=disable
+    # No `services: postgres` here on purpose. The integration suite starts its own
+    # Postgres through testcontainers (test/testdb), which keeps the version it runs
+    # against defined in exactly one place — test/testdb/testdb.go — instead of drifting
+    # between this file, docker-compose.yml and whatever the code expects. It also means CI
+    # runs the same path a developer runs locally.
+    #
+    # The escape hatch is still there: setting TEST_DATABASE_URL points the suite at an
+    # existing server instead. Nothing here needs it.
 
     steps:
       - uses: actions/checkout@v4
@@ -42,9 +31,30 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
 
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      # The sqlc output is committed, and it had already drifted: a query in
+      # db/queries/insight was rewritten and the generated package was never regenerated.
+      # Nothing noticed, because that time the struct came out identical. The next one will
+      # not be so lucky — sqlc infers nullability, and a wrong guess is a runtime scan
+      # failure, not a compile error (SPEC.md D-09).
+      - name: Verify the sqlc output is current
+        run: |
+          go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate
+          git diff --exit-code
+
       - name: Vet
         run: go vet ./...
 
+      # The race detector needs cgo, which is why this runs here and not on the Windows
+      # machine the project is developed on (CLAUDE.md).
       - name: Test
         run: go test -race ./...
 

@@ -1,0 +1,18 @@
+{
+  "body": {
+    "amount_cents": "number",
+    "created_at": "string",
+    "due_on": "string",
+    "id": "string",
+    "kind": "string",
+    "notes": "string",
+    "paid_amount_cents": "null",
+    "paid_on": "null",
+    "reference_year": "number",
+    "remaining_days": "number",
+    "status": "string",
+    "updated_at": "string",
+    "vehicle_id": "string"
+  },
+  "status": 201
+}

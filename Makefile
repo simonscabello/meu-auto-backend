@@ -5,7 +5,9 @@
 
 GO           ?= go
 BIN          := bin/meu-auto-api
-SQLC_VERSION ?= latest
+# Pinned: sqlc infers nullability, and an unannounced version bump can change a generated
+# struct without a single line of SQL changing (SPEC.md D-09).
+SQLC_VERSION ?= v1.31.1
 
 .DEFAULT_GOAL := help
 
@@ -38,9 +40,21 @@ run:
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags="-s -w" -o $(BIN) ./cmd/api
 
-## test: roda os testes unitarios
+## test: roda a suite inteira (a de integracao sobe um Postgres via testcontainers)
 test:
 	$(GO) test ./...
+
+## test-unit: so os testes que nao tocam banco — o loop rapido
+test-unit:
+	$(GO) test ./internal/...
+
+## test-integration: so a suite de integracao (exige Docker rodando)
+test-integration:
+	$(GO) test ./test/... -v
+
+## test-golden: regera os snapshots em test/golden — LEIA o diff antes de commitar
+test-golden:
+	$(GO) test ./test/integration -run TestGoldenResponses -update
 
 ## test-race: roda os testes com o detector de corrida (exige cgo/gcc — usado no CI)
 test-race:
@@ -70,4 +84,4 @@ migrate-create:
 	  touch "db/migrations/$${next}_$(name).up.sql" "db/migrations/$${next}_$(name).down.sql"; \
 	  echo "criado db/migrations/$${next}_$(name).{up,down}.sql"
 
-.PHONY: help db-up db-down db-reset run build test test-race test-cover vet tidy sqlc migrate-create
+.PHONY: help db-up db-down db-reset run build test test-unit test-integration test-golden test-race test-cover vet tidy sqlc migrate-create

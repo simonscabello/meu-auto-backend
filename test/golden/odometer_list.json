@@ -1,0 +1,17 @@
+{
+  "body": {
+    "data": [
+      {
+        "created_at": "string",
+        "id": "string",
+        "mileage_km": "number",
+        "notes": "null|string",
+        "occurred_on": "string",
+        "source": "string",
+        "vehicle_id": "string"
+      }
+    ],
+    "next_cursor": "null"
+  },
+  "status": 200
+}

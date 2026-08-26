@@ -77,11 +77,29 @@ gofmt -l .                           # must print nothing
 
 - **`go test -race` does not work here** — no gcc on this machine, and the race detector
   needs cgo. CI runs it on Linux (`make test-race`). Locally, `go test ./...` is the check.
+- **The integration suite needs Docker Desktop actually running**, not just installed. It
+  starts its own Postgres through testcontainers, and the failure when the engine is down
+  is the unhelpful `rootless Docker is not supported on Windows`. `docker info` is the
+  quick check.
+
+  ```bash
+  make test-unit           # ./internal/... — no database, sub-second
+  make test-integration    # ./test/... — starts a container, ~10s
+  make test-golden         # regenerate test/golden, then READ the diff
+  ```
+
+  - `TEST_DATABASE_URL=postgres://meuauto:meuauto@localhost:5433/postgres?sslmode=disable`
+    skips the container and uses the compose Postgres instead. It must point at a
+    **server**, not at the app's database: the suite creates and drops databases on it.
+  - `TESTDB_KEEP=1` leaves a failing test's database behind, named after the test, for
+    inspection with psql.
+  - `TEST_LOG=1` puts the request log back — it is silenced by default, because the
+    authorisation matrix alone emits about ninety rejected requests.
 - **sqlc runs through Docker**, so no local install is needed. Regenerate after touching
   anything in `db/queries` or `db/migrations`:
 
   ```bash
-  MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD:/src" -w /src sqlc/sqlc generate
+  MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD:/src" -w /src sqlc/sqlc:1.31.1 generate
   ```
 
   Then **read the generated struct.** sqlc infers nullability badly around UNIONs and
@@ -106,7 +124,7 @@ gofmt -l .                           # must print nothing
 
 **MVP-1 complete (phases 0–5).** The foundation is in place (validated config, structured logging, typed domain errors, `apperr → HTTP`, pgx pool, embedded migrations applied on boot, `/healthz` and `/readyz`, CI), plus three domain modules:
 
-- **identity** — `POST /v1/auth/{register,login,refresh,logout}`, `POST /v1/auth/password-reset/{request,confirm}`, `GET|PATCH|DELETE /v1/me`. argon2id passwords, HS256 access tokens with the algorithm pinned, opaque rotating refresh tokens with reuse detection, rate limiting by e-mail and by IP.
+- **identity** — `POST /v1/auth/{register,login,refresh,logout}`, `POST /v1/auth/password-reset/{request,confirm}`, `GET|PATCH|DELETE /v1/me`. argon2id passwords, HS256 access tokens with the algorithm pinned, opaque rotating refresh tokens with reuse detection scoped to rotation alone (SPEC.md D-15), rate limiting by e-mail and by IP.
 - **vehicle** — `GET|POST /v1/vehicles`, `GET|PATCH|DELETE /v1/vehicles/{id}`, `GET|POST /v1/vehicles/{id}/odometer`, `DELETE /v1/odometer/{id}`. Ownership-based authorisation, the odometer monotonicity rule, keyset pagination.
 - **maintenance** — `GET|POST /v1/maintenance-items`, `GET|POST /v1/vehicles/{id}/maintenance-plans`, `PATCH|DELETE /v1/maintenance-plans/{id}`, `GET|POST /v1/vehicles/{id}/maintenance-records`, `GET|PATCH|DELETE /v1/maintenance-records/{id}`. A seeded catalogue, plans materialised automatically on vehicle creation, records with line items, and the due engine.
 
@@ -117,11 +135,20 @@ gofmt -l .                           # must print nothing
 
 Deploy is prepared but **not yet done** — `Dockerfile`, `.dockerignore`, `railway.toml` and [`docs/DEPLOY.md`](./docs/DEPLOY.md). The production image was built and exercised locally (23.7 MB distroless; `postgresql://` normalisation, embedded tzdata, migrations on boot, SIGTERM drain, and every config guard confirmed in the real container). The Railway project itself needs the owner's account.
 
-The biggest remaining gap is **no automated tests below the pure logic**: repositories, SQL semantics, handlers and authorisation have only ever been checked by hand. That is the thing to fix before MVP-2, which starts with abastecimento — a module that writes into `odometer_readings` and the cost totals, exactly where a silent regression would land. See the roadmap in `SPEC.md` section 10.
+**The integration net is in place** (`test/`), which was the gap that had to close before MVP-2 — abastecimento writes into `odometer_readings` and the cost totals, exactly where a silent regression would land.
+
+- **`test/testdb`** gives every test its own database. One container per test binary; the migrations run once into a template, and each test clones it with `CREATE DATABASE ... TEMPLATE`. Cloning rather than truncating is deliberate — see the `TRUNCATE` trap below.
+- **`test/integration`** drives the API over HTTP through the real router, built by `app.New`. There are no database mocks and no fixtures written in SQL: a fixture that inserts directly can build a state the API would have refused.
+- **Three tests are guards rather than tests**, and they are the reason the rest keeps working:
+  - `TestEveryProtectedRouteIsInTheMatrix` walks the router and fails if a route is neither in the authorisation table nor on the short list of public ones. **A new endpoint cannot be merged without someone stating how it is authorised.**
+  - `TestRouterAndOpenAPIAgree` compares the served routes against `api/openapi.yaml`. Drift between the code and the contract the app generates its client from is now a failing build, not a discovery.
+  - `TestGoldenResponses` snapshots the *shape* of every response into `test/golden` — every key and the type of every leaf, not the values, which is what makes the files stable across runs. A renamed or vanished field fails; regenerate with `make test-golden` and read the diff, because a change there is a change to what an already-installed app receives.
+
+Under those sit the invariants: the odometer trigger and RN-01, aggregate atomicity, RN-09 materialisation, keyset pagination, refresh rotation and reuse detection, the password reset, and the LGPD erasure.
 
 **`internal/insight` is the only module allowed to depend on other modules.** The arrow is one-way and read-only: it calls the owning module's service and never re-derives a status. If you find yourself computing "overdue" inside insight, stop — the rule belongs to the module that owns the data, or the screen will drift from the domain behind it.
 
-**Local-dev trap:** `TRUNCATE users CASCADE` cascades to *tables*, not rows, and wipes the global `maintenance_items` catalogue seeded by migration 000005 — which will not re-run. Clean test data with `DELETE FROM users` and `DELETE FROM vehicles` instead, or re-apply that migration file by hand.
+**Local-dev trap:** `TRUNCATE users CASCADE` cascades to *tables*, not rows, and wipes the global `maintenance_items` catalogue seeded by migration 000005 — which will not re-run. Clean test data with `DELETE FROM users` and `DELETE FROM vehicles` instead, or re-apply that migration file by hand. The automated suite sidesteps this entirely by cloning a fresh database per test rather than cleaning one; the trap is still live in the compose database you develop against.
 
 **Date arithmetic lives in `internal/platform/civil`, nowhere else.** Civil dates — the day a service happened, the day an IPVA falls due — are `time.Time` at midnight UTC, matching a Postgres `date` column exactly. Do not reimplement `AddMonths`: Go's `AddDate` turns 31 January + 1 month into 3 March, which drifts every anniversary in the product.
 
@@ -133,13 +160,13 @@ Patterns now exist — `internal/identity` is the reference. Follow it rather th
 - **Repository** returns plain sentinel errors (`ErrUserNotFound`), never `apperr`. Multi-step writes are single methods that own their transaction, so no caller can perform half of one.
 - Handlers surface errors through `httpx.Error`; nothing else writes an error body.
 - Response DTOs are written by hand, never the sqlc struct — a renamed column must not silently change the API contract.
-- **`api/openapi.yaml` is the contract, and it is hand-written.** Change a request or response DTO and you change it in the same edit — the Flutter app generates its Dart client from that file, and nothing automated catches the drift yet. Validate with `docker run --rm -v "$PWD:/spec" redocly/cli lint /spec/api/openapi.yaml`.
+- **`api/openapi.yaml` is the contract, and it is hand-written.** Change a request or response DTO and you change it in the same edit — the Flutter app generates its Dart client from that file, and `TestRouterAndOpenAPIAgree` fails the build when a route drifts from it. That guard compares paths and methods, not schemas, so a changed field is still on you — the golden files are the other half. Validate with `docker run --rm -v "$PWD:/spec" redocly/cli lint /spec/api/openapi.yaml`.
 
 Two rules that are load-bearing rather than stylistic:
 
 - **Nothing reaches a vehicle by id without an ownership join.** `vehicle/authorize.go` is the single choke point, and the repository offers no query that fetches a vehicle without it. A vehicle the caller cannot access is reported as **404, never 403** — "you may not see this" confirms it exists. Adding a by-id-only query is how authorisation bugs get written.
-- **A module that owns user-scoped data registers an `identity.UserDataEraser`.** Account deletion cannot cascade to vehicles, because vehicles carry no `user_id`. Identity depends on the interface; wiring happens in `cmd/api/main.go`.
-- **Modules talk through ports with primitive signatures**, never shared structs — a shared type would have to live in one module or the other, and either direction creates an import this architecture does not want. See `maintenance.VehiclePort` and `vehicle.PlanInitializer`. The cycle between those two is broken with a setter in `main.go`, in the open.
+- **A module that owns user-scoped data registers an `identity.UserDataEraser`.** Account deletion cannot cascade to vehicles, because vehicles carry no `user_id`. Identity depends on the interface; wiring happens in `internal/app`.
+- **Modules talk through ports with primitive signatures**, never shared structs — a shared type would have to live in one module or the other, and either direction creates an import this architecture does not want. See `maintenance.VehiclePort` and `vehicle.PlanInitializer`. The cycle between those two is broken with a setter in `internal/app/app.go`, in the open.
 - **`vehicles.current_mileage_km` is maintained by a database trigger**, not by Go. Any module may insert into `odometer_readings` tagged with its own `source`, inside its own transaction; nobody has to remember to refresh the cache. Do not add a Go-side recalculation — see SPEC.md D-11.
 - **Register routes as flat patterns, never nested `chi.Route`.** Both `vehicle` and `maintenance` hang endpoints off `/vehicles/{vehicleID}`, and two subrouters on overlapping prefixes make chi panic at startup.
 

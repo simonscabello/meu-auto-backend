@@ -423,8 +423,9 @@ event sourcing, CQRS, gRPC, GraphQL, ORM, container de DI, mocks de banco.
 meu-auto-backend/
 ├── cmd/
 │   └── api/
-│       └── main.go                 # boot: config → log → db → migrate → router → serve
+│       └── main.go                 # boot: config → log → db → migrate → serve
 ├── internal/
+│   ├── app/                        # monta o grafo de objetos e devolve o handler
 │   ├── platform/                   # sem conhecimento de domínio
 │   │   ├── config/config.go        # env → struct, valida no boot
 │   │   ├── database/               # pgxpool + migrate com advisory lock
@@ -456,7 +457,8 @@ meu-auto-backend/
 ├── api/
 │   └── openapi.yaml                # <-- CONTRATO. Escrito à mão. Ver D-03.
 ├── test/
-│   ├── testdb/                     # helper testcontainers
+│   ├── testdb/                     # um banco migrado por teste, via testcontainers
+│   ├── integration/                # a suíte: HTTP real, banco real, app.New
 │   └── golden/                     # snapshots de resposta JSON (teste de compat)
 ├── docker-compose.yml              # SÓ Postgres. Nada mais.
 ├── Dockerfile                      # multi-stage, distroless
@@ -758,6 +760,33 @@ Sem APM, sem Prometheus, sem tracing no MVP.
 
 **Sem mock de banco.** Mock de SQL testa o mock, não a query.
 
+**Isolamento por clone, não por limpeza.** Um container por binário de teste; as migrations
+rodam uma vez num banco *template* e cada teste faz `CREATE DATABASE ... TEMPLATE`. Além de
+ser barato (o Postgres copia arquivos, não repete migration), evita a armadilha do
+`TRUNCATE ... CASCADE`, que alcança *tabelas* e apagaria o catálogo global semeado pela
+migration 000005 — que não roda de novo.
+
+**As fixtures passam pela API, nunca por INSERT.** Uma fixture escrita em SQL constrói
+estados que a API teria recusado, e um teste que parte de um estado impossível não prova
+nada sobre o sistema que roda. SQL direto só aparece nas asserções que a API deliberadamente
+não responde: o que sobrou em disco depois de um soft delete, se um agregado gravou metade
+de si mesmo.
+
+**Três testes são trava, não teste** — é deles que vem a garantia de que os outros
+continuam valendo alguma coisa:
+
+| Trava | O que quebra o build |
+|---|---|
+| `TestEveryProtectedRouteIsInTheMatrix` | Uma rota servida que não está na tabela de autorização nem na lista curta das públicas. **Endpoint novo exige alguém dizer como ele é autorizado** (RN-07). |
+| `TestRouterAndOpenAPIAgree` | Divergência de path ou método entre o router e `api/openapi.yaml`. Compara a forma das rotas, **não** os schemas. |
+| `TestGoldenResponses` | Um campo renomeado, sumido, com outro tipo ou que virou nullable. |
+
+O golden guarda a **forma** da resposta — cada chave e o tipo de cada folha —, não os
+valores. Um snapshot de valores precisaria ser regerado a cada execução, porque toda
+resposta carrega id e timestamp novos, e arquivo golden sempre desatualizado é arquivo que
+ninguém lê. Regerar com `make test-golden` e **ler o diff**: mudança ali é mudança no que o
+app já instalado recebe (D-01).
+
 ### D-10 — Não-funcionais
 
 | Requisito | Decisão MVP-1 |
@@ -774,6 +803,32 @@ Sem APM, sem Prometheus, sem tracing no MVP.
 | **LGPD** | `DELETE /v1/me` exige a senha atual e faz hard delete em cascata. Como `vehicles` não tem `user_id`, a cascata do banco não alcança os veículos: cada módulo com dado do usuário registra um `identity.UserDataEraser`, e o identity depende da **interface**, nunca do módulo. Erasers rodam antes do delete do usuário — falha de eraser não perde nada e o retry completa. Quando a transferência chegar, vira anonimização com preservação do histórico do veículo — **e isso precisa constar no aviso de privacidade desde já** |
 | **Observabilidade** | `/healthz`, `/readyz`, logs estruturados. Nada mais até existir uma pergunta real que eles não respondam |
 | **Timezone** | `DATE` para toda data civil elimina bug de fuso. `America/Sao_Paulo` só entra no cálculo de "hoje", passado explicitamente à função pura |
+
+### D-15 — Só rotação dispara detecção de reuso
+
+`refresh_tokens.revoked_reason` diz **por que** um token foi revogado: `rotation`, `logout`,
+`reuse` ou `password_reset`. `Refresh` só toca o alarme — encerrar todas as sessões da conta
+— quando o token reapresentado é `rotation`.
+
+O motivo é assimetria de sinal. Um token **rotacionado** reapresentado significa que o
+cliente legítimo está com o sucessor e alguém está com este: não dá para dizer quem é
+atacante e quem é vítima, e derrubar tudo é a resposta certa. Os outros três são
+invalidações deliberadas, e reapresentar um deles não prova nada além de que um token morto
+continua morto.
+
+A distinção não existia: logout e rotação escreviam `revoked_at` e mais nada. O efeito
+prático aparecia longe da causa — o app repete um logout que estourou o tempo numa conexão
+ruim, o retry cai na detecção de reuso, e o dono é deslogado do tablet por ter saído do
+celular. Numa operadora móvel brasileira isso não é caso raro; é terça-feira.
+
+A migration 000008 preenche as linhas já revogadas com `rotation`, que é a leitura
+conservadora: mantém o alarme ligado para tudo que já estava na tabela. Uma `CHECK` garante
+que `revoked_at` e `revoked_reason` andem juntos, para que uma query que esqueça o motivo
+falhe em vez de reintroduzir a ambiguidade em silêncio. A lista de valores está duplicada
+entre a migration e `internal/identity` — mude as duas juntas.
+
+Coberto por `TestRefreshRotatesAndDetectsReuse` (o alarme dispara) e
+`TestReplayingALoggedOutTokenLeavesOtherSessionsAlone` (o ruído em que ele não pode disparar).
 
 ---
 

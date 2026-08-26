@@ -1,0 +1,35 @@
+{
+  "body": {
+    "data": [
+      {
+        "created_at": "string",
+        "id": "string",
+        "items": [
+          {
+            "cost_cents": "number",
+            "description": "string",
+            "id": "string",
+            "item_name": "string",
+            "item_slug": "string",
+            "maintenance_item_id": "string",
+            "part_brand": "string",
+            "warranty_km": "number",
+            "warranty_months": "number",
+            "warranty_until": "string",
+            "warranty_until_km": "number"
+          }
+        ],
+        "kind": "string",
+        "mileage_km": "number",
+        "notes": "string",
+        "occurred_on": "string",
+        "total_cost_cents": "number",
+        "updated_at": "string",
+        "vehicle_id": "string",
+        "workshop_name": "string"
+      }
+    ],
+    "next_cursor": "null"
+  },
+  "status": 200
+}

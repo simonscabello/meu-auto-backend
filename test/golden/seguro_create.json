@@ -1,0 +1,20 @@
+{
+  "body": {
+    "broker_name": "string",
+    "broker_phone": "string",
+    "created_at": "string",
+    "emergency_phone": "string",
+    "ends_on": "string",
+    "id": "string",
+    "insurer_name": "string",
+    "notes": "string",
+    "policy_number": "string",
+    "premium_cents": "number",
+    "remaining_days": "number",
+    "starts_on": "string",
+    "status": "string",
+    "updated_at": "string",
+    "vehicle_id": "string"
+  },
+  "status": 201
+}

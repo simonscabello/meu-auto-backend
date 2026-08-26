@@ -148,18 +148,35 @@ func (r *Repository) RefreshTokenByHash(ctx context.Context, hash []byte) (db.Re
 	return token, nil
 }
 
-// RevokeRefreshToken revokes a single token. Used by logout.
-func (r *Repository) RevokeRefreshToken(ctx context.Context, id uuid.UUID) error {
-	if _, err := r.queries.RevokeRefreshToken(ctx, db.RevokeRefreshTokenParams{ID: id}); err != nil {
-		return fmt.Errorf("revoke refresh token: %w", err)
+// Why a token was revoked. These mirror the CHECK constraint in migration 000008 — change
+// both together.
+//
+// Only revokeReasonRotation is evidence of anything. A rotated-out token presented again
+// means the legitimate client holds the successor and somebody else holds this one; the
+// other three are deliberate invalidations, and replaying one proves only that a dead token
+// is dead. Service.Refresh is where that distinction is spent.
+const (
+	revokeReasonRotation      = "rotation"
+	revokeReasonLogout        = "logout"
+	revokeReasonReuse         = "reuse"
+	revokeReasonPasswordReset = "password_reset"
+)
+
+// RevokeRefreshTokenOnLogout revokes a single token because its owner signed out.
+func (r *Repository) RevokeRefreshTokenOnLogout(ctx context.Context, id uuid.UUID) error {
+	if _, err := r.queries.RevokeRefreshTokenOnLogout(ctx, id); err != nil {
+		return fmt.Errorf("revoke refresh token on logout: %w", err)
 	}
 	return nil
 }
 
 // RevokeAllUserRefreshTokens ends every session for a user. Used on reuse detection and
-// after a password reset.
-func (r *Repository) RevokeAllUserRefreshTokens(ctx context.Context, userID uuid.UUID) error {
-	if _, err := r.queries.RevokeAllUserRefreshTokens(ctx, userID); err != nil {
+// after a password reset; reason records which.
+func (r *Repository) RevokeAllUserRefreshTokens(ctx context.Context, userID uuid.UUID, reason string) error {
+	if _, err := r.queries.RevokeAllUserRefreshTokens(ctx, db.RevokeAllUserRefreshTokensParams{
+		UserID: userID,
+		Reason: reason,
+	}); err != nil {
 		return fmt.Errorf("revoke user refresh tokens: %w", err)
 	}
 	return nil
@@ -186,7 +203,7 @@ func (r *Repository) RotateRefreshToken(ctx context.Context, oldID, userID uuid.
 			return fmt.Errorf("create successor refresh token: %w", err)
 		}
 
-		rows, err := q.RevokeRefreshToken(ctx, db.RevokeRefreshTokenParams{
+		rows, err := q.RevokeRefreshTokenOnRotation(ctx, db.RevokeRefreshTokenOnRotationParams{
 			ID:         oldID,
 			ReplacedBy: &created.ID,
 		})
@@ -263,7 +280,10 @@ func (r *Repository) CompletePasswordReset(ctx context.Context, tokenID, userID 
 			return fmt.Errorf("update password: %w", err)
 		}
 
-		if _, err := q.RevokeAllUserRefreshTokens(ctx, userID); err != nil {
+		if _, err := q.RevokeAllUserRefreshTokens(ctx, db.RevokeAllUserRefreshTokensParams{
+			UserID: userID,
+			Reason: revokeReasonPasswordReset,
+		}); err != nil {
 			return fmt.Errorf("revoke sessions after reset: %w", err)
 		}
 		return nil

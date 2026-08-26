@@ -47,7 +47,7 @@ func (q *Queries) CreatePasswordResetToken(ctx context.Context, arg CreatePasswo
 const createRefreshToken = `-- name: CreateRefreshToken :one
 INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, user_agent)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, user_id, token_hash, expires_at, revoked_at, replaced_by, user_agent, created_at
+RETURNING id, user_id, token_hash, expires_at, revoked_at, replaced_by, user_agent, created_at, revoked_reason
 `
 
 type CreateRefreshTokenParams struct {
@@ -76,6 +76,7 @@ func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshToken
 		&i.ReplacedBy,
 		&i.UserAgent,
 		&i.CreatedAt,
+		&i.RevokedReason,
 	)
 	return i, err
 }
@@ -111,7 +112,7 @@ func (q *Queries) GetPasswordResetTokenByHash(ctx context.Context, tokenHash []b
 }
 
 const getRefreshTokenByHash = `-- name: GetRefreshTokenByHash :one
-SELECT id, user_id, token_hash, expires_at, revoked_at, replaced_by, user_agent, created_at FROM refresh_tokens WHERE token_hash = $1
+SELECT id, user_id, token_hash, expires_at, revoked_at, replaced_by, user_agent, created_at, revoked_reason FROM refresh_tokens WHERE token_hash = $1
 `
 
 func (q *Queries) GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (RefreshToken, error) {
@@ -126,6 +127,7 @@ func (q *Queries) GetRefreshTokenByHash(ctx context.Context, tokenHash []byte) (
 		&i.ReplacedBy,
 		&i.UserAgent,
 		&i.CreatedAt,
+		&i.RevokedReason,
 	)
 	return i, err
 }
@@ -162,34 +164,57 @@ func (q *Queries) MarkPasswordResetTokenUsed(ctx context.Context, id uuid.UUID) 
 
 const revokeAllUserRefreshTokens = `-- name: RevokeAllUserRefreshTokens :execrows
 UPDATE refresh_tokens
-SET revoked_at = now()
-WHERE user_id = $1 AND revoked_at IS NULL
+SET revoked_at = now(), revoked_reason = $1::text
+WHERE user_id = $2 AND revoked_at IS NULL
 `
 
-// Used on reuse detection, on logout-everywhere and after a password reset.
-func (q *Queries) RevokeAllUserRefreshTokens(ctx context.Context, userID uuid.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, revokeAllUserRefreshTokens, userID)
+type RevokeAllUserRefreshTokensParams struct {
+	Reason string
+	UserID uuid.UUID
+}
+
+// Used on reuse detection and after a password reset — the reason says which.
+func (q *Queries) RevokeAllUserRefreshTokens(ctx context.Context, arg RevokeAllUserRefreshTokensParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeAllUserRefreshTokens, arg.Reason, arg.UserID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
 }
 
-const revokeRefreshToken = `-- name: RevokeRefreshToken :execrows
+const revokeRefreshTokenOnLogout = `-- name: RevokeRefreshTokenOnLogout :execrows
 UPDATE refresh_tokens
-SET revoked_at = now(), replaced_by = $2
+SET revoked_at = now(), revoked_reason = 'logout'
 WHERE id = $1 AND revoked_at IS NULL
 `
 
-type RevokeRefreshTokenParams struct {
+func (q *Queries) RevokeRefreshTokenOnLogout(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeRefreshTokenOnLogout, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeRefreshTokenOnRotation = `-- name: RevokeRefreshTokenOnRotation :execrows
+
+UPDATE refresh_tokens
+SET revoked_at = now(), revoked_reason = 'rotation', replaced_by = $2
+WHERE id = $1 AND revoked_at IS NULL
+`
+
+type RevokeRefreshTokenOnRotationParams struct {
 	ID         uuid.UUID
 	ReplacedBy *uuid.UUID
 }
 
+// Three revocations rather than one, because revoked_reason is what lets Refresh tell a
+// replayed rotated token (somebody has a copy) from a replayed logout (a retry). See
+// migration 000008.
 // Rotation: revoke the presented token and point it at its successor, so a replayed old
 // token can be traced to the chain it belonged to.
-func (q *Queries) RevokeRefreshToken(ctx context.Context, arg RevokeRefreshTokenParams) (int64, error) {
-	result, err := q.db.Exec(ctx, revokeRefreshToken, arg.ID, arg.ReplacedBy)
+func (q *Queries) RevokeRefreshTokenOnRotation(ctx context.Context, arg RevokeRefreshTokenOnRotationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeRefreshTokenOnRotation, arg.ID, arg.ReplacedBy)
 	if err != nil {
 		return 0, err
 	}

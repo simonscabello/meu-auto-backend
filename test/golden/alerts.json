@@ -1,0 +1,19 @@
+{
+  "body": {
+    "data": [
+      {
+        "due_at_km": "null|number",
+        "due_on": "string",
+        "kind": "string",
+        "reference_id": "string",
+        "reference_type": "string",
+        "remaining_days": "number",
+        "remaining_km": "null|number",
+        "severity": "string",
+        "subtitle": "null|string",
+        "title": "string"
+      }
+    ]
+  },
+  "status": 200
+}

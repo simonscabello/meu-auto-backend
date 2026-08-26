@@ -89,14 +89,15 @@ type PasswordResetToken struct {
 }
 
 type RefreshToken struct {
-	ID         uuid.UUID
-	UserID     uuid.UUID
-	TokenHash  []byte
-	ExpiresAt  time.Time
-	RevokedAt  *time.Time
-	ReplacedBy *uuid.UUID
-	UserAgent  *string
-	CreatedAt  time.Time
+	ID            uuid.UUID
+	UserID        uuid.UUID
+	TokenHash     []byte
+	ExpiresAt     time.Time
+	RevokedAt     *time.Time
+	ReplacedBy    *uuid.UUID
+	UserAgent     *string
+	CreatedAt     time.Time
+	RevokedReason *string
 }
 
 type Seguro struct {

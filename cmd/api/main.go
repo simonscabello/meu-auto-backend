@@ -3,6 +3,9 @@
 // Boot order is deliberate: configuration is validated before anything else, so a
 // misconfigured deployment dies immediately with a readable message instead of accepting
 // traffic it cannot serve.
+//
+// The object graph itself lives in internal/app, so that the integration suite exercises
+// the same wiring this command serves rather than a copy of it.
 package main
 
 import (
@@ -23,16 +26,11 @@ import (
 	_ "time/tzdata"
 
 	"github.com/simonscabello/meu-auto-backend/db"
-	"github.com/simonscabello/meu-auto-backend/internal/identity"
-	"github.com/simonscabello/meu-auto-backend/internal/insight"
-	"github.com/simonscabello/meu-auto-backend/internal/maintenance"
-	"github.com/simonscabello/meu-auto-backend/internal/obligation"
-	"github.com/simonscabello/meu-auto-backend/internal/platform/auth"
+	"github.com/simonscabello/meu-auto-backend/internal/app"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/config"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/database"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/logging"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/mailer"
-	"github.com/simonscabello/meu-auto-backend/internal/vehicle"
 )
 
 const (
@@ -81,8 +79,6 @@ func run() error {
 		return fmt.Errorf("load timezone %s: %w", config.TimeZone, err)
 	}
 
-	tokens := auth.NewTokenService([]byte(cfg.JWTSecret), config.JWTIssuer)
-
 	var mail mailer.Mailer
 	if cfg.ResendAPIKey != "" {
 		mail = mailer.NewResend(cfg.ResendAPIKey, cfg.MailFrom)
@@ -92,41 +88,14 @@ func run() error {
 		mail = mailer.LogMailer{Log: log}
 	}
 
-	// Vehicle is built first because identity takes it as a UserDataEraser: vehicles carry
-	// no user_id, so deleting an account cannot cascade to them.
-	vehicleService := vehicle.NewService(vehicle.NewRepository(pool), location, log)
-	vehicleHandler := vehicle.NewHandler(vehicleService, tokens)
-
-	// Maintenance depends on vehicle for authorisation, and vehicle depends on
-	// maintenance to materialise a new vehicle's suggested plans. The cycle is real, so
-	// it is broken here, in the open, with a setter — rather than hidden inside a
-	// container that would not make it go away.
-	maintenanceService := maintenance.NewService(
-		maintenance.NewRepository(pool), vehicleService, location)
-	vehicleService.SetPlanInitializer(maintenanceService)
-	maintenanceHandler := maintenance.NewHandler(maintenanceService, tokens)
-
-	obligationService := obligation.NewService(obligation.NewRepository(pool), vehicleService, location)
-	obligationHandler := obligation.NewHandler(obligationService, tokens)
-
-	// The read model composes the other modules rather than re-deriving anything, so it is
-	// built last and depends on all three.
-	insightHandler := insight.NewHandler(
-		insight.NewService(insight.NewRepository(pool), vehicleService,
-			maintenanceService, obligationService, location),
-		tokens)
-
-	identityHandler := identity.NewHandler(
-		identity.NewService(identity.NewRepository(pool), tokens, mail, log,
-			cfg.PasswordResetURL, vehicleService),
-		tokens,
-		cfg.TrustProxy,
-	)
-
 	server := &http.Server{
 		Addr: net.JoinHostPort("", cfg.Port),
-		Handler: newRouter(cfg, pool, identityHandler, vehicleHandler,
-			maintenanceHandler, obligationHandler, insightHandler),
+		Handler: app.New(cfg, app.Deps{
+			Pool:     pool,
+			Mailer:   mail,
+			Location: location,
+			Log:      log,
+		}),
 
 		// Without these a single slow or malicious client can hold a connection open
 		// indefinitely. Go applies no timeouts by default.
