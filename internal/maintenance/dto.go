@@ -12,8 +12,43 @@ import (
 
 // Contract values. The app switches on these (SPEC.md D-01).
 const (
-	OriginSuggested = "suggested"
-	OriginUser      = "user"
+	// Origin is where the information in a plan came from.
+	//
+	// It answers one question — "who says so?" — which is why it is one column rather than
+	// an ownership flag beside a provenance flag that would answer it twice.
+	// OriginSuggested is this system generic market default; OriginUser is the decision the
+	// owner made, and is what a future refresh of the defaults must never overwrite.
+	OriginSuggested        = "suggested"
+	OriginUser             = "user"
+	OriginManufacturer     = "manufacturer"
+	OriginManual           = "manual"
+	OriginAdmin            = "admin"
+	OriginExternalProvider = "external_provider"
+
+	// Strategy is HOW an item is maintained. The old model had only one of these and
+	// expressed it as "does the plan have an interval", which could not tell a component
+	// with no service schedule from one whose schedule we simply do not know.
+	//
+	//	StrategyPeriodic        replace every X km or Y months
+	//	StrategyInspection      look at it during a service; there may be no replacement
+	//	StrategyConditionBased  replace when worn — tyres, pads, battery. An interval here
+	//	                        is a "worth checking" horizon, never a deadline, and the
+	//	                        app words it that way.
+	//	StrategyNoSchedule      the component exists and has no periodic rule
+	//	StrategyNotApplicable   the vehicle does not have the component
+	StrategyPeriodic       = "periodic"
+	StrategyInspection     = "inspection"
+	StrategyConditionBased = "condition_based"
+	StrategyNoSchedule     = "no_schedule"
+	StrategyNotApplicable  = "not_applicable"
+
+	// HistoryStatus is what the owner said about the past when no record exists.
+	//
+	// HistoryUnknown and HistoryNever are DIFFERENT answers and the product must never
+	// merge them: "não sei" is a gap in memory, "nunca foi feito" is a fact about the car.
+	HistoryNotAsked = "not_asked"
+	HistoryUnknown  = "unknown"
+	HistoryNever    = "never"
 
 	KindMaintenance = "maintenance"
 	KindCare        = "care"
@@ -128,11 +163,13 @@ type createPlanRequest struct {
 	ID                string `json:"id"`
 	MaintenanceItemID string `json:"maintenance_item_id"`
 
-	IntervalKm     *int32 `json:"interval_km"`
-	IntervalMonths *int32 `json:"interval_months"`
-	IntervalDays   *int32 `json:"interval_days"`
-	AlertKm        *int32 `json:"alert_km"`
-	AlertDays      *int32 `json:"alert_days"`
+	IntervalKm     *int32  `json:"interval_km"`
+	IntervalMonths *int32  `json:"interval_months"`
+	IntervalDays   *int32  `json:"interval_days"`
+	AlertKm        *int32  `json:"alert_km"`
+	AlertDays      *int32  `json:"alert_days"`
+	Strategy       *string `json:"strategy"`
+	Notes          *string `json:"notes"`
 }
 
 func (r *createPlanRequest) validate() error {
@@ -143,6 +180,12 @@ func (r *createPlanRequest) validate() error {
 	}
 	validateIntervals(errs, r.IntervalKm, r.IntervalMonths, r.IntervalDays)
 	validateAlerts(errs, r.AlertKm, r.AlertDays)
+	validateStrategy(errs, r.Strategy)
+
+	r.Notes = trimOptional(r.Notes)
+	if r.Notes != nil && len(*r.Notes) > maxNotesLength {
+		errs.Add("notes", "Observação muito longa.")
+	}
 
 	return errs.Err("Não foi possível criar o plano.")
 }
@@ -154,9 +197,23 @@ type updatePlanRequest struct {
 	AlertKm        *int32 `json:"alert_km"`
 	AlertDays      *int32 `json:"alert_days"`
 
+	// Strategy is how the owner says this item is maintained on their car, including
+	// "not_applicable" for a component it does not have. A system suggestion never blocks
+	// a correction — the owner is the one looking at the vehicle.
+	Strategy *string `json:"strategy"`
+
+	// HistoryStatus records "não sei" or "nunca foi feito" without inventing a record. A
+	// declared record asserts a date and a mileage, and somebody who does not remember has
+	// neither — writing one anyway would put a fabricated fact into the service history,
+	// which is the one thing this product must never do.
+	HistoryStatus *string `json:"history_status"`
+
+	Notes *string `json:"notes"`
+
 	// ClearIntervals turns the plan into one that only groups history and never comes
 	// due. It needs its own flag because a null field already means "leave unchanged".
 	ClearIntervals bool `json:"clear_intervals"`
+	ClearNotes     bool `json:"clear_notes"`
 }
 
 func (r *updatePlanRequest) validate() error {
@@ -166,10 +223,51 @@ func (r *updatePlanRequest) validate() error {
 		errs.Add("clear_intervals",
 			"Não é possível limpar e definir intervalos na mesma requisição.")
 	}
+	if r.ClearNotes && r.Notes != nil {
+		errs.Add("clear_notes",
+			"Não é possível limpar e definir a observação na mesma requisição.")
+	}
 	validateIntervals(errs, r.IntervalKm, r.IntervalMonths, r.IntervalDays)
 	validateAlerts(errs, r.AlertKm, r.AlertDays)
+	validateStrategy(errs, r.Strategy)
+	validateHistoryStatus(errs, r.HistoryStatus)
+
+	r.Notes = trimOptional(r.Notes)
+	if r.Notes != nil && len(*r.Notes) > maxNotesLength {
+		errs.Add("notes", "Observação muito longa.")
+	}
 
 	return errs.Err("Não foi possível atualizar o plano.")
+}
+
+// answerProfileRequest is the owner telling us how their car is built.
+type answerProfileRequest struct {
+	Question string `json:"question"`
+	Answer   string `json:"answer"`
+}
+
+// normalizeAndValidate resolves the answer against the fixed question list. An unknown
+// question or an answer that is not one of its options is a 422, never a stored row: the
+// vocabulary lives in profile.go and nothing outside it may widen it.
+func (r *answerProfileRequest) normalizeAndValidate() (ProfileQuestion, ProfileOption, error) {
+	errs := validate.New()
+
+	r.Question = strings.TrimSpace(r.Question)
+	r.Answer = strings.TrimSpace(r.Answer)
+
+	question, ok := findProfileQuestion(r.Question)
+	if !ok {
+		errs.Add("question", "Pergunta desconhecida.")
+		return ProfileQuestion{}, ProfileOption{}, errs.Err("Não foi possível salvar a resposta.")
+	}
+
+	option, ok := question.option(r.Answer)
+	if !ok {
+		errs.Add("answer", "Resposta inválida para esta pergunta.")
+		return ProfileQuestion{}, ProfileOption{}, errs.Err("Não foi possível salvar a resposta.")
+	}
+
+	return question, option, nil
 }
 
 type recordItemRequest struct {
@@ -314,6 +412,35 @@ func validateIntervals(errs validate.Errors, km, months, days *int32) {
 	}
 }
 
+// planStrategies is the vocabulary a client may set. StrategyNotApplicable is in it on
+// purpose: "meu carro não tem isso" is a thing the owner is allowed to say, and it is the
+// escape hatch for every vehicle whose configuration this system cannot derive.
+var planStrategies = map[string]bool{
+	StrategyPeriodic:       true,
+	StrategyInspection:     true,
+	StrategyConditionBased: true,
+	StrategyNoSchedule:     true,
+	StrategyNotApplicable:  true,
+}
+
+var historyStatuses = map[string]bool{
+	HistoryNotAsked: true,
+	HistoryUnknown:  true,
+	HistoryNever:    true,
+}
+
+func validateStrategy(errs validate.Errors, strategy *string) {
+	if strategy != nil && !planStrategies[*strategy] {
+		errs.Add("strategy", "Estratégia inválida.")
+	}
+}
+
+func validateHistoryStatus(errs validate.Errors, status *string) {
+	if status != nil && !historyStatuses[*status] {
+		errs.Add("history_status", "Estado de histórico inválido.")
+	}
+}
+
 func validateAlerts(errs validate.Errors, alertKm, alertDays *int32) {
 	if alertKm != nil && (*alertKm < 0 || *alertKm > maxIntervalKm) {
 		errs.Add("alert_km", "Antecedência em quilômetros inválida.")
@@ -376,12 +503,21 @@ func trimOptional(value *string) *string {
 // ---------- responses ----------
 
 type itemResponse struct {
-	ID                    string `json:"id"`
-	Slug                  string `json:"slug"`
-	Name                  string `json:"name"`
-	Kind                  string `json:"kind"`
-	VehicleType           string `json:"vehicle_type"`
-	IsCustom              bool   `json:"is_custom"`
+	ID          string `json:"id"`
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	VehicleType string `json:"vehicle_type"`
+	IsCustom    bool   `json:"is_custom"`
+
+	// What kind of maintenance this item is, as a concept. The plan for a given vehicle
+	// may say something else — including that the vehicle does not have the component.
+	//
+	// `powertrain_requirement` is deliberately NOT on the wire. Applicability is decided
+	// here, against the vehicle, and shipping the raw requirement would invite the app to
+	// decide it a second time and disagree.
+	DefaultStrategy string `json:"default_strategy"`
+
 	DefaultIntervalKm     *int32 `json:"default_interval_km"`
 	DefaultIntervalMonths *int32 `json:"default_interval_months"`
 	DefaultIntervalDays   *int32 `json:"default_interval_days"`
@@ -395,6 +531,7 @@ func toItemResponse(i db.MaintenanceItem) itemResponse {
 		Kind:                  i.Kind,
 		VehicleType:           i.VehicleType,
 		IsCustom:              i.OwnerUserID != nil,
+		DefaultStrategy:       i.DefaultStrategy,
 		DefaultIntervalKm:     i.DefaultIntervalKm,
 		DefaultIntervalMonths: i.DefaultIntervalMonths,
 		DefaultIntervalDays:   i.DefaultIntervalDays,
@@ -417,6 +554,24 @@ type planResponse struct {
 	AlertDays      int32  `json:"alert_days"`
 	Origin         string `json:"origin"`
 
+	// Strategy is how this item is maintained on THIS vehicle. It is what lets the app
+	// word a condition-based item as "vale checar" instead of "vencido", and it is where
+	// "não se aplica" lives.
+	Strategy string `json:"strategy"`
+
+	// HistoryStatus tells "we never asked" from "asked, and they do not know" — the
+	// difference between a useful prompt and nagging.
+	HistoryStatus string  `json:"history_status"`
+	Notes         *string `json:"notes"`
+
+	// The question to ask when this item has no baseline, and how much it matters, both
+	// from the catalogue. They are here so the app builds its history prompt from the plans
+	// it already has, instead of carrying a map from technical slug to pt-BR question and a
+	// hand-ranked list of slugs — which is how every car ended up being asked about a
+	// timing belt.
+	HistoryQuestion *string `json:"history_question"`
+	HistoryPriority int32   `json:"history_priority"`
+
 	Status        Status  `json:"status"`
 	DueAtKm       *int32  `json:"due_at_km"`
 	DueOn         *string `json:"due_on"`
@@ -429,26 +584,105 @@ type planResponse struct {
 
 func toPlanResponse(due Due) planResponse {
 	out := planResponse{
-		ID:             due.Plan.ID.String(),
-		ItemID:         due.Plan.ItemID.String(),
-		ItemSlug:       due.Plan.ItemSlug,
-		ItemName:       due.Plan.ItemName,
-		ItemKind:       due.Plan.ItemKind,
-		IntervalKm:     due.Plan.IntervalKm,
-		IntervalMonths: due.Plan.IntervalMonths,
-		IntervalDays:   due.Plan.IntervalDays,
-		AlertKm:        due.Plan.AlertKm,
-		AlertDays:      due.Plan.AlertDays,
-		Origin:         due.Plan.Origin,
-		Status:         due.Status,
-		DueAtKm:        due.DueAtKm,
-		DueOn:          civil.FormatPtr(due.DueOn),
-		RemainingKm:    due.RemainingKm,
-		RemainingDays:  due.RemainingDays,
+		ID:              due.Plan.ID.String(),
+		ItemID:          due.Plan.ItemID.String(),
+		ItemSlug:        due.Plan.ItemSlug,
+		ItemName:        due.Plan.ItemName,
+		ItemKind:        due.Plan.ItemKind,
+		IntervalKm:      due.Plan.IntervalKm,
+		IntervalMonths:  due.Plan.IntervalMonths,
+		IntervalDays:    due.Plan.IntervalDays,
+		AlertKm:         due.Plan.AlertKm,
+		AlertDays:       due.Plan.AlertDays,
+		Origin:          due.Plan.Origin,
+		Strategy:        due.Plan.Strategy,
+		HistoryStatus:   due.Plan.HistoryStatus,
+		Notes:           due.Plan.Notes,
+		HistoryQuestion: due.Plan.HistoryQuestion,
+		HistoryPriority: due.Plan.HistoryPriority,
+		Status:          due.Status,
+		DueAtKm:         due.DueAtKm,
+		DueOn:           civil.FormatPtr(due.DueOn),
+		RemainingKm:     due.RemainingKm,
+		RemainingDays:   due.RemainingDays,
 	}
 	if due.Last != nil {
 		out.LastOccurredOn = civil.FormatPtr(&due.Last.OccurredOn)
 		out.LastMileageKm = &due.Last.MileageKm
+	}
+	return out
+}
+
+// ---------- profile ----------
+
+// profileResponse answers "what does this vehicle actually need, and what do we still not
+// know about it?" in one payload.
+//
+// The slugs an answer decides are NOT on the wire. The app posts a question id and an
+// answer value and reads back the plans; deciding which catalogue entries an answer turns
+// on stays here, so there is one definition of the rule and no chance of the two halves
+// disagreeing.
+type profileResponse struct {
+	// unknown (no plan at all) | incomplete (something still open) | ready.
+	Status string `json:"status"`
+
+	// False when the vehicle has no fuel type. Everything that depends on having an engine
+	// is unresolved, and the app asks for the fuel instead of guessing at components.
+	PowertrainKnown bool `json:"powertrain_known"`
+
+	PlanCount           int `json:"plan_count"`
+	NotApplicableCount  int `json:"not_applicable_count"`
+	MissingHistoryCount int `json:"missing_history_count"`
+
+	Questions []profileQuestionResponse `json:"questions"`
+
+	// What has already been answered, question id to answer value — including "unknown",
+	// which is why the question is not being asked again.
+	Answers map[string]string `json:"answers"`
+}
+
+type profileQuestionResponse struct {
+	ID      string                          `json:"id"`
+	Prompt  string                          `json:"prompt"`
+	Help    string                          `json:"help"`
+	Options []profileQuestionOptionResponse `json:"options"`
+}
+
+type profileQuestionOptionResponse struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+func toProfileResponse(profile Profile) profileResponse {
+	out := profileResponse{
+		Status:              profile.Status,
+		PowertrainKnown:     profile.PowertrainKnown,
+		PlanCount:           profile.PlanCount,
+		NotApplicableCount:  profile.NotApplicable,
+		MissingHistoryCount: profile.MissingHistory,
+		Questions:           make([]profileQuestionResponse, 0, len(profile.Questions)),
+		Answers:             profile.Answers,
+	}
+	if out.Answers == nil {
+		// Never null: a client iterating the map should not have to special-case "nothing
+		// answered yet".
+		out.Answers = map[string]string{}
+	}
+
+	for _, question := range profile.Questions {
+		rendered := profileQuestionResponse{
+			ID:      question.ID,
+			Prompt:  question.Prompt,
+			Help:    question.Help,
+			Options: make([]profileQuestionOptionResponse, 0, len(question.Options)),
+		}
+		for _, option := range question.Options {
+			rendered.Options = append(rendered.Options, profileQuestionOptionResponse{
+				Value: option.Value,
+				Label: option.Label,
+			})
+		}
+		out.Questions = append(out.Questions, rendered)
 	}
 	return out
 }

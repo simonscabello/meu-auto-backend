@@ -681,9 +681,22 @@ paths:
         Ordenado por urgência: vencido, vence em breve, sem baseline, em dia, sem
         periodicidade.
 
+        **Itens que o veículo não tem ficam de fora por padrão.** Um carro elétrico não
+        recebe plano de troca de óleo, e o que ele não tem não vem como card desabilitado —
+        simplesmente não vem. Só a tela de configuração pede
+        `include_not_applicable=true`, porque desfazer precisa ser possível.
+
         `due_at_km`/`remaining_km` são `null` quando o plano não tem intervalo por
         distância; `due_on`/`remaining_days` são `null` quando não tem intervalo por tempo.
         `null` significa **essa dimensão não se aplica**, nunca zero.
+      parameters:
+        - name: include_not_applicable
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: |
+            Inclui os planos com `strategy: not_applicable`. Ausente, `false` e qualquer
+            outro valor significam a mesma coisa: não incluir.
       responses:
         "200":
           description: Os planos do veículo
@@ -760,6 +773,66 @@ paths:
         "204": { description: Plano desativado }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/vehicles/{vehicleId}/maintenance-profile:
+    parameters:
+      - $ref: "#/components/parameters/VehicleId"
+    get:
+      operationId: getMaintenanceProfile
+      tags: [manutencao]
+      summary: Perfil de manutenção do veículo
+      description: |
+        O que este veículo precisa e o que ainda não sabemos sobre ele.
+
+        **Não existe tabela de perfil.** `maintenance_plans` já é a linha que liga um veículo
+        a um item do catálogo com intervalo e origem — ela É o perfil. Este recurso soma o
+        que um plano não consegue guardar: as perguntas que ninguém respondeu ainda.
+
+        Os slugs que cada resposta decide **não** vão no contrato. O app manda o id da
+        pergunta e o valor da resposta e relê os planos; decidir quais entradas do catálogo
+        uma resposta liga e desliga fica no servidor, para existir uma definição só da regra.
+      responses:
+        "200":
+          description: O perfil do veículo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceProfile" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/vehicles/{vehicleId}/maintenance-profile/answers:
+    parameters:
+      - $ref: "#/components/parameters/VehicleId"
+    post:
+      operationId: answerMaintenanceProfileQuestion
+      tags: [manutencao]
+      summary: Responder uma pergunta sobre o veículo
+      description: |
+        Grava o que o dono disse sobre como o carro é feito e aplica isso aos planos, em uma
+        transação.
+
+        **"Não sei" é resposta de verdade e passa por aqui igual**: é gravada, faz a pergunta
+        parar de voltar, e não cria plano de nenhum dos lados. Não gravar nada seria
+        indistinguível de nunca ter perguntado — foi assim que o fluxo antigo acabou
+        perguntando a mesma coisa para sempre.
+
+        Devolve o perfil inteiro, não só a resposta: uma resposta muda quais planos existem,
+        e obrigar o app a buscar de novo deixaria uma janela em que a tela e o servidor
+        discordam.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AnswerMaintenanceProfileRequest" }
+      responses:
+        "200":
+          description: O perfil já com a resposta aplicada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceProfile" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
 
   /v1/vehicles/{vehicleId}/maintenance-records:
     parameters:
@@ -1270,9 +1343,40 @@ components:
     MaintenancePlanOrigin:
       type: string
       description: |
-        `suggested` veio do catálogo no cadastro do veículo; `user` foi criado ou editado
-        pelo dono. Qualquer edição promove para `user`.
-      enum: [suggested, user]
+        De onde veio a informação do plano. Uma pergunta só — "quem disse isso?".
+
+        `suggested` é o padrão genérico de mercado deste sistema; `user` é a decisão do
+        dono, e qualquer edição promove para `user`. Os demais existem para quando a origem
+        for melhor do que um padrão genérico; **nada os escreve hoje**, e um app antigo que
+        não os conheça deve tratá-los como desconhecido, nunca quebrar.
+      enum: [suggested, user, manufacturer, manual, admin, external_provider]
+
+    MaintenanceStrategy:
+      type: string
+      description: |
+        **Como** o item é mantido neste veículo. Antes existia só `periodic`, expresso como
+        "o plano tem intervalo?" — o que não distinguia um componente sem troca programada
+        de um cujo intervalo simplesmente não sabemos.
+
+        - `periodic` — troca a cada X km ou Y meses.
+        - `inspection` — verificar na revisão; pode não haver troca.
+        - `condition_based` — troca por desgaste (pneu, pastilha, bateria). Um intervalo
+          aqui é horizonte de "vale checar", nunca prazo — a interface deve escrever assim.
+        - `no_schedule` — o componente existe e não tem regra periódica.
+        - `not_applicable` — **o veículo não tem esse componente.** Não aparece em nenhuma
+          tela que responda "o que meu carro precisa"; só na tela de configuração, que é
+          onde dá para desfazer.
+      enum: [periodic, inspection, condition_based, no_schedule, not_applicable]
+
+    MaintenanceHistoryStatus:
+      type: string
+      description: |
+        O que o dono disse sobre o passado deste item, quando não existe registro.
+
+        `unknown` ("não sei") e `never` ("nunca foi feito") são respostas **diferentes** e o
+        produto não pode juntá-las. Um registro real sempre prevalece sobre este campo — ele
+        só carrega o que foi afirmado na ausência de um.
+      enum: [not_asked, unknown, never]
 
     MaintenanceStatus:
       type: string
@@ -1286,7 +1390,9 @@ components:
           pedido de configuração.
         - `sem_periodicidade` — o plano agrupa histórico e nunca vence. Estado válido, não
           dado faltando.
-      enum: [vencido, vence_em_breve, em_dia, sem_baseline, sem_periodicidade]
+        - `nao_se_aplica` — o veículo não tem esse componente. Nunca vence, nunca vira
+          alerta, e só aparece quando a requisição pede `include_not_applicable=true`.
+      enum: [vencido, vence_em_breve, em_dia, sem_baseline, sem_periodicidade, nao_se_aplica]
 
     ObligationKind:
       type: string
@@ -1710,7 +1816,7 @@ components:
 
     MaintenanceItem:
       type: object
-      required: [id, slug, name, kind, vehicle_type, is_custom]
+      required: [id, slug, name, kind, vehicle_type, is_custom, default_strategy]
       properties:
         id: { type: string, format: uuid }
         slug: { type: string }
@@ -1720,6 +1826,15 @@ components:
         is_custom:
           type: boolean
           description: '`true` quando é um item criado por este usuário, não do catálogo global.'
+        default_strategy:
+          allOf: [{ $ref: "#/components/schemas/MaintenanceStrategy" }]
+          description: |
+            A estratégia do item como conceito. O plano de um veículo específico pode dizer
+            outra coisa — inclusive que aquele veículo não tem o componente.
+
+            O requisito de motorização do item **não** vai no contrato de propósito: a
+            aplicabilidade é decidida no servidor, contra o veículo. Mandá-lo para o app
+            seria convidar a uma segunda decisão que pode discordar da primeira.
         default_interval_km: { type: integer, format: int32, nullable: true }
         default_interval_months: { type: integer, format: int32, nullable: true }
         default_interval_days: { type: integer, format: int32, nullable: true }
@@ -1735,6 +1850,10 @@ components:
         interval_days: { type: integer, format: int32, nullable: true, minimum: 1 }
         alert_km: { type: integer, format: int32, nullable: true, minimum: 0 }
         alert_days: { type: integer, format: int32, nullable: true, minimum: 0 }
+        strategy:
+          allOf: [{ $ref: "#/components/schemas/MaintenanceStrategy" }]
+          description: Omitido, usa a estratégia padrão do item no catálogo.
+        notes: { type: string, nullable: true, maxLength: 500 }
 
     UpdateMaintenancePlanRequest:
       type: object
@@ -1744,17 +1863,33 @@ components:
         interval_days: { type: integer, format: int32, nullable: true, minimum: 1 }
         alert_km: { type: integer, format: int32, nullable: true, minimum: 0 }
         alert_days: { type: integer, format: int32, nullable: true, minimum: 0 }
+        strategy:
+          allOf: [{ $ref: "#/components/schemas/MaintenanceStrategy" }]
+          description: |
+            Inclusive `not_applicable`, que é como o dono diz "meu carro não tem isso". Uma
+            sugestão do sistema nunca bloqueia a correção — quem está olhando para o carro é
+            ele.
+        history_status:
+          allOf: [{ $ref: "#/components/schemas/MaintenanceHistoryStatus" }]
+          description: |
+            Registra "não sei" ou "nunca foi feito" **sem inventar um registro**. Um registro
+            `declared` afirma data e quilometragem, e quem não lembra não tem nenhuma das
+            duas — gravá-lo mesmo assim colocaria um fato fabricado no histórico de serviço.
+        notes: { type: string, nullable: true, maxLength: 500 }
         clear_intervals:
           type: boolean
           description: |
             Limpa os três intervalos, transformando o plano em um que só agrupa histórico e
             nunca vence. Precisa de flag própria porque `null` já significa "não altere".
             Não pode vir junto de um intervalo.
+        clear_notes:
+          type: boolean
+          description: Limpa a observação. Mesma razão de `clear_intervals`.
 
     MaintenancePlanSummary:
       type: object
       description: O plano sem o estado calculado. Devolvido em criação e atualização.
-      required: [id, maintenance_item_id, alert_km, alert_days, origin]
+      required: [id, maintenance_item_id, alert_km, alert_days, origin, strategy, history_status]
       properties:
         id: { type: string, format: uuid }
         maintenance_item_id: { type: string, format: uuid }
@@ -1764,12 +1899,16 @@ components:
         alert_km: { type: integer, format: int32 }
         alert_days: { type: integer, format: int32 }
         origin: { $ref: "#/components/schemas/MaintenancePlanOrigin" }
+        strategy: { $ref: "#/components/schemas/MaintenanceStrategy" }
+        history_status: { $ref: "#/components/schemas/MaintenanceHistoryStatus" }
+        notes: { type: string, nullable: true }
 
     MaintenancePlan:
       type: object
       description: O plano com o vencimento já calculado.
       required:
-        [id, maintenance_item_id, item_slug, item_name, item_kind, alert_km, alert_days, origin, status]
+        [id, maintenance_item_id, item_slug, item_name, item_kind, alert_km, alert_days, origin,
+         strategy, history_status, status]
       properties:
         id: { type: string, format: uuid }
         maintenance_item_id: { type: string, format: uuid }
@@ -1782,6 +1921,23 @@ components:
         alert_km: { type: integer, format: int32 }
         alert_days: { type: integer, format: int32 }
         origin: { $ref: "#/components/schemas/MaintenancePlanOrigin" }
+        strategy: { $ref: "#/components/schemas/MaintenanceStrategy" }
+        history_status: { $ref: "#/components/schemas/MaintenanceHistoryStatus" }
+        notes: { type: string, nullable: true }
+        history_question:
+          type: string
+          nullable: true
+          description: |
+            A pergunta a fazer quando este item não tem baseline, vinda do catálogo. Está no
+            contrato para o app montar o pedido de histórico a partir dos planos que já tem,
+            em vez de carregar um mapa de slug técnico para pergunta em pt-BR — que foi
+            exatamente como todo carro acabou sendo perguntado sobre correia dentada.
+        history_priority:
+          type: integer
+          format: int32
+          description: |
+            Quais perguntas importam mais, maior primeiro. Ordenação de apresentação, mas
+            pertence ao catálogo e não a uma lista de slugs dentro do app.
         status: { $ref: "#/components/schemas/MaintenanceStatus" }
         due_at_km:
           type: integer
@@ -1801,6 +1957,84 @@ components:
           nullable: true
           description: Data do último registro deste item. `null` quando `status` é `sem_baseline`.
         last_mileage_km: { type: integer, format: int32, nullable: true }
+
+    MaintenanceProfileStatus:
+      type: string
+      description: |
+        - `unknown` — nenhum plano. O app diz isso com todas as letras e oferece adicionar;
+          não inventa um cronograma.
+        - `incomplete` — existem planos e ainda há algo em aberto.
+        - `ready` — nada a perguntar.
+      enum: [unknown, incomplete, ready]
+
+    MaintenanceProfile:
+      type: object
+      required:
+        [status, powertrain_known, plan_count, not_applicable_count, missing_history_count,
+         questions, answers]
+      properties:
+        status: { $ref: "#/components/schemas/MaintenanceProfileStatus" }
+        powertrain_known:
+          type: boolean
+          description: |
+            `false` quando o veículo não tem `fuel_type`. Tudo que depende de haver um motor
+            fica sem resposta, e o app pede o combustível em vez de adivinhar os componentes.
+        plan_count:
+          type: integer
+          description: Planos que o veículo tem, sem contar os `not_applicable`.
+        not_applicable_count:
+          type: integer
+          description: Itens marcados como inexistentes neste veículo. É o número que a tela
+            de configuração usa para oferecer desfazer.
+        missing_history_count:
+          type: integer
+          description: |
+            Planos cujo item nunca foi registrado **e** sobre os quais ninguém foi
+            perguntado. Um "não sei" já respondido não entra nesta conta.
+        questions:
+          type: array
+          items: { $ref: "#/components/schemas/MaintenanceProfileQuestion" }
+        answers:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            O que já foi respondido, id da pergunta para valor da resposta — incluindo
+            `unknown`, que é justamente por que a pergunta não está sendo feita de novo.
+            Nunca `null`.
+
+    MaintenanceProfileQuestion:
+      type: object
+      required: [id, prompt, help, options]
+      properties:
+        id:
+          type: string
+          description: |
+            `timing_drive` é a única hoje. Correia dentada arrebentada leva o motor junto, e
+            o modelo antigo perguntava de correia para todo carro — inclusive para os que têm
+            corrente e para os que não têm motor a combustão nenhum.
+        prompt: { type: string }
+        help: { type: string }
+        options:
+          type: array
+          items:
+            type: object
+            required: [value, label]
+            properties:
+              value: { type: string }
+              label: { type: string }
+
+    AnswerMaintenanceProfileRequest:
+      type: object
+      required: [question, answer]
+      properties:
+        question:
+          type: string
+          description: O `id` de uma pergunta devolvida pelo perfil.
+        answer:
+          type: string
+          description: |
+            Um dos `value` das opções daquela pergunta. Qualquer outro valor é `422` — o
+            vocabulário vive no servidor e nada fora dele pode ampliá-lo.
 
     MaintenanceRecordItemRequest:
       type: object
@@ -2046,7 +2280,7 @@ components:
 
     Dashboard:
       type: object
-      required: [vehicle, odometer, alerts, costs]
+      required: [vehicle, odometer, alerts, profile, costs]
       properties:
         vehicle:
           type: object
@@ -2080,6 +2314,21 @@ components:
               type: array
               description: Apenas os mais urgentes. A lista completa está em `/alerts`.
               items: { $ref: "#/components/schemas/Alert" }
+        profile:
+          type: object
+          required: [status, powertrain_known, open_questions]
+          description: |
+            O suficiente para a tela principal decidir se mostra **um** aviso discreto de
+            "ainda falta saber algo sobre o seu carro" — nada além disso. As perguntas em si
+            vivem em `GET /v1/vehicles/{id}/maintenance-profile`.
+          properties:
+            status: { $ref: "#/components/schemas/MaintenanceProfileStatus" }
+            powertrain_known:
+              type: boolean
+              description: |
+                `false` quando o veículo não tem combustível informado — a única lacuna que
+                impede derivar qualquer coisa sobre o motor.
+            open_questions: { type: integer }
         costs:
           type: object
           required:

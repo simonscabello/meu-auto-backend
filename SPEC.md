@@ -247,6 +247,60 @@ desativáveis. O usuário vê valor na primeira tela, sem configurar nada.
 O flag `origin` permite, no futuro, atualizar intervalos sugeridos sem sobrescrever o
 que o usuário customizou.
 
+> **Refinado pela RN-11.** `suggest_by_default` diz que o item vale ser oferecido; **não**
+> diz que o veículo tem o componente. Quem decide isso é o veículo.
+
+### RN-11 — Aplicabilidade: o veículo define o contexto
+
+Não existe plano universal de manutenção. Um carro elétrico não tem óleo de motor, um
+diesel não tem vela, e nada disso é opinião — é o que as palavras significam.
+
+**Não existe tabela de perfil.** `maintenance_plans` já é a linha que liga um veículo a um
+item do catálogo, com intervalo e origem. Ela **é** o perfil. O que faltava nela:
+
+| coluna | o que responde |
+|---|---|
+| `maintenance_plans.strategy` | `periodic` \| `inspection` \| `condition_based` \| `no_schedule` \| `not_applicable` |
+| `maintenance_plans.history_status` | `not_asked` \| `unknown` \| `never` |
+| `maintenance_plans.notes` | observação do dono sobre este item neste carro |
+| `maintenance_plans.origin` | **ampliada** para `suggested \| user \| manufacturer \| manual \| admin \| external_provider` |
+| `maintenance_items.default_strategy` | a estratégia do item como conceito |
+| `maintenance_items.powertrain_requirement` | `any` \| `combustion` \| `spark_ignition` \| `high_voltage` |
+| `maintenance_items.history_question` / `history_priority` | a pergunta em pt-BR e o quanto ela importa |
+| `vehicle_profile_answers` | o que o dono contou sobre como o carro é feito |
+
+**Três estados de aplicabilidade, e o terceiro é o que importa** (`maintenance/powertrain.go`):
+
+```
+o veículo tem       → plano normal, com os padrões do catálogo
+o veículo não tem   → plano com strategy = 'not_applicable'; some de toda tela, e é desfazível
+não dá para saber   → NENHUMA LINHA. Uma linha seria uma afirmação, e não temos uma.
+```
+
+A **única** derivação automática é o que uma motorização é: `vehicles.fuel_type` →
+`Powertrain`. Nada aqui sabe marca, modelo ou intervalo de fabricante, e não pode crescer
+para saber — isso seria o banco universal de manutenção automotiva que este projeto
+deliberadamente não está construindo.
+
+**Correia dentada × corrente de comando não é derivável.** Trocar `correia_dentada` por
+`corrente_comando` no seed seria só trocar uma regra rígida por outra. Então nenhum dos dois
+é sugerido: o dono é **perguntado uma vez** (`vehicle_profile_answers`, pergunta
+`timing_drive`), e **"não sei" é resposta válida** — gravada, para a pergunta parar de
+voltar, e sem criar plano de nenhum dos lados.
+
+**`history_status` existe por um motivo só:** "não sei" não é "nunca foi feito", e nenhum dos
+dois é um `maintenance_record`. Um registro afirma data e quilometragem, e quem não lembra
+não tem nenhuma das duas — gravá-lo mesmo assim colocaria um fato fabricado no histórico
+cujo valor inteiro é ser confiável (RN-03).
+
+**Corrigir o `fuel_type` corrige os planos**, nas duas direções, com três travas:
+`origin <> 'user'` (decisão do dono é dele), sem histórico (nunca contradizer um fato
+registrado) e intervalos preservados (desfazer é um toque).
+
+> Gatilho para uma tabela de perfil de verdade: quando existir **dado técnico por
+> modelo** de fonte confiável, ou quando a mesma pergunta precisar de resposta diferente
+> por eixo/posição. Não antes.
+
 ### RN-10 — Histórico do veículo × dados privados do dono
 
 Classificação **documentada agora, implementada quando a transferência chegar**:

@@ -171,6 +171,14 @@ func protectedRoutes() []protectedRoute {
 			func(f *ownedResources) string { return "/v1/maintenance-plans/" + f.planID },
 			nil, hiddenFromStrangers},
 
+		{http.MethodGet, "/v1/vehicles/{vehicleID}/maintenance-profile",
+			vehiclePath("/maintenance-profile"), nil, hiddenFromStrangers},
+		{http.MethodPost, "/v1/vehicles/{vehicleID}/maintenance-profile/answers",
+			vehiclePath("/maintenance-profile/answers"),
+			func(*ownedResources) any {
+				return map[string]any{"question": "timing_drive", "answer": "unknown"}
+			}, hiddenFromStrangers},
+
 		{http.MethodGet, "/v1/vehicles/{vehicleID}/maintenance-records",
 			vehiclePath("/maintenance-records"), nil, hiddenFromStrangers},
 		{http.MethodPost, "/v1/vehicles/{vehicleID}/maintenance-records",

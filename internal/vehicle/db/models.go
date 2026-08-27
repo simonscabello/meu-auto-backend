@@ -23,6 +23,10 @@ type MaintenanceItem struct {
 	SuggestByDefault      bool
 	IsActive              bool
 	CreatedAt             time.Time
+	DefaultStrategy       string
+	PowertrainRequirement string
+	HistoryQuestion       *string
+	HistoryPriority       int32
 }
 
 type MaintenancePlan struct {
@@ -38,6 +42,9 @@ type MaintenancePlan struct {
 	IsActive          bool
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	Strategy          string
+	HistoryStatus     string
+	Notes             *string
 }
 
 type MaintenanceRecord struct {
@@ -227,4 +234,12 @@ type VehicleOwnership struct {
 	StartedOn time.Time
 	EndedOn   *time.Time
 	CreatedAt time.Time
+}
+
+type VehicleProfileAnswer struct {
+	VehicleID  uuid.UUID
+	Question   string
+	Answer     string
+	Source     string
+	AnsweredAt time.Time
 }

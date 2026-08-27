@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -70,4 +71,18 @@ func QueryInt32(r *http.Request, name string, fallback, minimum, maximum int32) 
 	}
 
 	return min(max(int32(parsed), minimum), maximum)
+}
+
+// QueryBool reads an opt-in flag from the query string.
+//
+// Only "true" and "1" turn it on. Everything else — absent, empty, "false", a typo — is
+// off, because every caller of this is an opt-in that widens what a response contains, and
+// a misread flag must fail closed.
+func QueryBool(r *http.Request, key string) bool {
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get(key))) {
+	case "true", "1":
+		return true
+	default:
+		return false
+	}
 }

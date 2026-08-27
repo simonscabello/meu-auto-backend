@@ -19,7 +19,7 @@ INSERT INTO maintenance_items (
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false)
 ON CONFLICT (owner_user_id, slug) WHERE owner_user_id IS NOT NULL DO NOTHING
-RETURNING id, slug, name, kind, vehicle_type, owner_user_id, default_interval_km, default_interval_months, default_interval_days, suggest_by_default, is_active, created_at
+RETURNING id, slug, name, kind, vehicle_type, owner_user_id, default_interval_km, default_interval_months, default_interval_days, suggest_by_default, is_active, created_at, default_strategy, powertrain_requirement, history_question, history_priority
 `
 
 type CreateCustomMaintenanceItemParams struct {
@@ -60,12 +60,16 @@ func (q *Queries) CreateCustomMaintenanceItem(ctx context.Context, arg CreateCus
 		&i.SuggestByDefault,
 		&i.IsActive,
 		&i.CreatedAt,
+		&i.DefaultStrategy,
+		&i.PowertrainRequirement,
+		&i.HistoryQuestion,
+		&i.HistoryPriority,
 	)
 	return i, err
 }
 
 const getMaintenanceItem = `-- name: GetMaintenanceItem :one
-SELECT id, slug, name, kind, vehicle_type, owner_user_id, default_interval_km, default_interval_months, default_interval_days, suggest_by_default, is_active, created_at
+SELECT id, slug, name, kind, vehicle_type, owner_user_id, default_interval_km, default_interval_months, default_interval_days, suggest_by_default, is_active, created_at, default_strategy, powertrain_requirement, history_question, history_priority
 FROM maintenance_items
 WHERE id = $1
   AND is_active
@@ -95,12 +99,64 @@ func (q *Queries) GetMaintenanceItem(ctx context.Context, arg GetMaintenanceItem
 		&i.SuggestByDefault,
 		&i.IsActive,
 		&i.CreatedAt,
+		&i.DefaultStrategy,
+		&i.PowertrainRequirement,
+		&i.HistoryQuestion,
+		&i.HistoryPriority,
 	)
 	return i, err
 }
 
+const listGlobalMaintenanceItemsBySlug = `-- name: ListGlobalMaintenanceItemsBySlug :many
+SELECT id, slug, name, kind, vehicle_type, owner_user_id, default_interval_km, default_interval_months, default_interval_days, suggest_by_default, is_active, created_at, default_strategy, powertrain_requirement, history_question, history_priority
+FROM maintenance_items
+WHERE owner_user_id IS NULL
+  AND is_active
+  AND slug = ANY ($1::text[])
+`
+
+// Global entries only, by slug. Used to resolve a profile answer to the items it decides —
+// "corrente" turns the chain on and the belt off. Never reaches a custom item, because a
+// profile question is about the catalogue this system ships, not about somebody's own row.
+func (q *Queries) ListGlobalMaintenanceItemsBySlug(ctx context.Context, slugs []string) ([]MaintenanceItem, error) {
+	rows, err := q.db.Query(ctx, listGlobalMaintenanceItemsBySlug, slugs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MaintenanceItem{}
+	for rows.Next() {
+		var i MaintenanceItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.Kind,
+			&i.VehicleType,
+			&i.OwnerUserID,
+			&i.DefaultIntervalKm,
+			&i.DefaultIntervalMonths,
+			&i.DefaultIntervalDays,
+			&i.SuggestByDefault,
+			&i.IsActive,
+			&i.CreatedAt,
+			&i.DefaultStrategy,
+			&i.PowertrainRequirement,
+			&i.HistoryQuestion,
+			&i.HistoryPriority,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMaintenanceItems = `-- name: ListMaintenanceItems :many
-SELECT id, slug, name, kind, vehicle_type, owner_user_id, default_interval_km, default_interval_months, default_interval_days, suggest_by_default, is_active, created_at
+SELECT id, slug, name, kind, vehicle_type, owner_user_id, default_interval_km, default_interval_months, default_interval_days, suggest_by_default, is_active, created_at, default_strategy, powertrain_requirement, history_question, history_priority
 FROM maintenance_items
 WHERE is_active
   AND (owner_user_id IS NULL OR owner_user_id = $1)
@@ -138,6 +194,10 @@ func (q *Queries) ListMaintenanceItems(ctx context.Context, arg ListMaintenanceI
 			&i.SuggestByDefault,
 			&i.IsActive,
 			&i.CreatedAt,
+			&i.DefaultStrategy,
+			&i.PowertrainRequirement,
+			&i.HistoryQuestion,
+			&i.HistoryPriority,
 		); err != nil {
 			return nil, err
 		}
@@ -150,7 +210,7 @@ func (q *Queries) ListMaintenanceItems(ctx context.Context, arg ListMaintenanceI
 }
 
 const listSuggestedMaintenanceItems = `-- name: ListSuggestedMaintenanceItems :many
-SELECT id, slug, name, kind, vehicle_type, owner_user_id, default_interval_km, default_interval_months, default_interval_days, suggest_by_default, is_active, created_at
+SELECT id, slug, name, kind, vehicle_type, owner_user_id, default_interval_km, default_interval_months, default_interval_days, suggest_by_default, is_active, created_at, default_strategy, powertrain_requirement, history_question, history_priority
 FROM maintenance_items
 WHERE owner_user_id IS NULL
   AND is_active
@@ -160,6 +220,10 @@ ORDER BY kind, name
 `
 
 // The entries a new vehicle gets a plan for (SPEC.md RN-09).
+//
+// `suggest_by_default` says the item is worth offering; it does NOT say the vehicle has the
+// component. `powertrain_requirement` is what answers that, and it is applied in Go against
+// the vehicle's fuel type — see internal/maintenance/powertrain.go.
 func (q *Queries) ListSuggestedMaintenanceItems(ctx context.Context, vehicleType string) ([]MaintenanceItem, error) {
 	rows, err := q.db.Query(ctx, listSuggestedMaintenanceItems, vehicleType)
 	if err != nil {
@@ -182,6 +246,10 @@ func (q *Queries) ListSuggestedMaintenanceItems(ctx context.Context, vehicleType
 			&i.SuggestByDefault,
 			&i.IsActive,
 			&i.CreatedAt,
+			&i.DefaultStrategy,
+			&i.PowertrainRequirement,
+			&i.HistoryQuestion,
+			&i.HistoryPriority,
 		); err != nil {
 			return nil, err
 		}

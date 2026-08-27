@@ -34,6 +34,11 @@
       "current_km": "number",
       "recorded_on": "string"
     },
+    "profile": {
+      "open_questions": "number",
+      "powertrain_known": "boolean",
+      "status": "string"
+    },
     "vehicle": {
       "brand": "string",
       "id": "string",

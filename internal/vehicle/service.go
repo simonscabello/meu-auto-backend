@@ -22,7 +22,12 @@ import (
 // dependency arrow points at an abstraction this package owns rather than at another
 // module.
 type PlanInitializer interface {
-	InitializeVehiclePlans(ctx context.Context, vehicleID uuid.UUID, vehicleType string) error
+	// InitializeVehiclePlans materialises what THIS vehicle needs.
+	//
+	// fuelType is passed because it is the only thing a vehicle knows about itself that
+	// decides applicability: an electric car has no engine oil. nil means the owner never
+	// said, and the maintenance module answers "unknown" rather than guessing.
+	InitializeVehiclePlans(ctx context.Context, vehicleID uuid.UUID, vehicleType string, fuelType *string) error
 }
 
 // CatalogPort is what this module needs from the vehicle catalogue.
@@ -145,7 +150,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req createVehicl
 	// still no plans. A vehicle with no plans is usable — the owner can add them — so the
 	// failure is logged for us, not surfaced to them.
 	if created && s.planInitializer != nil {
-		if err := s.planInitializer.InitializeVehiclePlans(ctx, vehicle.ID, vehicle.VehicleType); err != nil {
+		if err := s.planInitializer.InitializeVehiclePlans(ctx, vehicle.ID, vehicle.VehicleType, vehicle.FuelType); err != nil {
 			s.log.Error("failed to initialise suggested maintenance plans",
 				slog.String("vehicle_id", vehicle.ID.String()),
 				slog.Any("error", err))
@@ -220,7 +225,8 @@ func (s *Service) Get(ctx context.Context, userID, vehicleID uuid.UUID) (db.Vehi
 }
 
 func (s *Service) Update(ctx context.Context, userID, vehicleID uuid.UUID, req updateVehicleRequest) (db.Vehicle, error) {
-	if _, err := s.authorizeVehicle(ctx, userID, vehicleID); err != nil {
+	before, err := s.authorizeVehicle(ctx, userID, vehicleID)
+	if err != nil {
 		return db.Vehicle{}, err
 	}
 	if err := req.normalizeAndValidate(s.today()); err != nil {
@@ -258,7 +264,35 @@ func (s *Service) Update(ctx context.Context, userID, vehicleID uuid.UUID, req u
 	case err != nil:
 		return db.Vehicle{}, apperr.Internal(err)
 	}
+
+	// Filling in — or correcting — the fuel type changes what the vehicle IS, and therefore
+	// what it needs. A car registered by hand with no fuel gets no oil-change plan until
+	// somebody says it burns fuel, so answering that has to complete the profile.
+	//
+	// Same reasoning as on create: best effort, outside the write, and never fatal. The
+	// vehicle was updated; failing here would make the owner retry an edit that worked.
+	if s.planInitializer != nil && fuelTypeChanged(before.FuelType, updated.FuelType) {
+		if err := s.planInitializer.InitializeVehiclePlans(ctx, updated.ID, updated.VehicleType, updated.FuelType); err != nil {
+			s.log.Error("failed to refresh maintenance plans after a fuel type change",
+				slog.String("vehicle_id", updated.ID.String()),
+				slog.Any("error", err))
+		}
+	}
+
 	return updated, nil
+}
+
+// fuelTypeChanged reports whether the vehicle now says something different about its own
+// powertrain. nil is "never said" and is not the same as any value.
+func fuelTypeChanged(before, after *string) bool {
+	switch {
+	case before == nil && after == nil:
+		return false
+	case before == nil || after == nil:
+		return true
+	default:
+		return *before != *after
+	}
 }
 
 // Delete soft-deletes the vehicle. The history survives, because it is the product's
@@ -386,6 +420,21 @@ func (s *Service) AuthorizeVehicle(ctx context.Context, userID, vehicleID uuid.U
 		return "", 0, err
 	}
 	return v.VehicleType, v.CurrentMileageKm, nil
+}
+
+// AuthorizeVehicleForPlanning is AuthorizeVehicle plus the one fact only the maintenance
+// module needs: what the vehicle burns.
+//
+// A second method rather than a wider AuthorizeVehicle, because the obligation module
+// authorises through the same service and an IPVA has no powertrain. Widening the shared
+// method would push a maintenance concept into a port that has no use for it, and every
+// call site there would carry a blank it must ignore.
+func (s *Service) AuthorizeVehicleForPlanning(ctx context.Context, userID, vehicleID uuid.UUID) (vehicleType string, fuelType *string, currentMileageKm int32, err error) {
+	v, err := s.authorizeVehicle(ctx, userID, vehicleID)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	return v.VehicleType, v.FuelType, v.CurrentMileageKm, nil
 }
 
 // SetPlanInitializer wires the maintenance module in after construction.

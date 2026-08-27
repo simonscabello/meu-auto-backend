@@ -6,6 +6,9 @@
         "alert_km": "number",
         "due_at_km": "null",
         "due_on": "null",
+        "history_priority": "number",
+        "history_question": "null|string",
+        "history_status": "string",
         "id": "string",
         "interval_days": "null|number",
         "interval_km": "null|number",
@@ -16,10 +19,12 @@
         "last_mileage_km": "null",
         "last_occurred_on": "null",
         "maintenance_item_id": "string",
+        "notes": "null",
         "origin": "string",
         "remaining_days": "null",
         "remaining_km": "null",
-        "status": "string"
+        "status": "string",
+        "strategy": "string"
       }
     ]
   },

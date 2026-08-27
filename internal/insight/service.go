@@ -26,8 +26,15 @@ type (
 	}
 
 	MaintenancePort interface {
-		ListPlans(ctx context.Context, userID, vehicleID uuid.UUID) ([]maintenance.Due, error)
+		// includeNotApplicable is always false here. This module renders what a car needs;
+		// a component it does not have is not a quieter alert, it is not an alert.
+		ListPlans(ctx context.Context, userID, vehicleID uuid.UUID, includeNotApplicable bool) ([]maintenance.Due, error)
 		ListWarranties(ctx context.Context, userID, vehicleID uuid.UUID) ([]maintenance.Warranty, error)
+
+		// Profile is read for the dashboard prompt alone — how many questions are still
+		// open about this vehicle. Asked through the port like everything else here, so
+		// the rule for what counts as open stays in the module that owns it.
+		Profile(ctx context.Context, userID, vehicleID uuid.UUID) (maintenance.Profile, error)
 	}
 
 	ObligationPort interface {
@@ -78,7 +85,7 @@ func (s *Service) today() time.Time { return civil.Today(s.now, s.location) }
 // owns the data, so a vehicle the caller cannot see produces a not-found from the first
 // call rather than an empty list from this one.
 func (s *Service) Alerts(ctx context.Context, userID, vehicleID uuid.UUID) ([]Alert, error) {
-	dues, err := s.maintenance.ListPlans(ctx, userID, vehicleID)
+	dues, err := s.maintenance.ListPlans(ctx, userID, vehicleID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +221,7 @@ func (s *Service) Dashboard(ctx context.Context, userID, vehicleID uuid.UUID, co
 		return Dashboard{}, err
 	}
 
-	dues, err := s.maintenance.ListPlans(ctx, userID, vehicleID)
+	dues, err := s.maintenance.ListPlans(ctx, userID, vehicleID, false)
 	if err != nil {
 		return Dashboard{}, err
 	}
@@ -235,11 +242,21 @@ func (s *Service) Dashboard(ctx context.Context, userID, vehicleID uuid.UUID, co
 
 	// Counted, not listed: a vehicle created today has one of these per suggested plan, and
 	// the app shows them as a single "complete o histórico" prompt.
+	//
+	// A plan the owner already answered "não sei" about is NOT counted. The prompt is meant
+	// to disappear once it has been addressed, and "I do not remember" is an answer — the
+	// old behaviour kept it on screen forever, which is how a helpful nudge becomes noise.
 	needsBaseline := 0
 	for _, due := range dues {
-		if due.Status == maintenance.StatusNoBaseline {
+		if due.Status == maintenance.StatusNoBaseline &&
+			due.Plan.HistoryStatus == maintenance.HistoryNotAsked {
 			needsBaseline++
 		}
+	}
+
+	profile, err := s.maintenance.Profile(ctx, userID, vehicleID)
+	if err != nil {
+		return Dashboard{}, err
 	}
 
 	since := civil.AddMonths(s.today(), -int(costMonths))
@@ -248,7 +265,7 @@ func (s *Service) Dashboard(ctx context.Context, userID, vehicleID uuid.UUID, co
 		return Dashboard{}, apperr.Internal(err)
 	}
 
-	return buildDashboard(summary, alerts, needsBaseline, costs, costMonths, since,
+	return buildDashboard(summary, alerts, needsBaseline, profile, costs, costMonths, since,
 		dashboardAlertLimit), nil
 }
 

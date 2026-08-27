@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/simonscabello/meu-auto-backend/internal/insight/db"
+	"github.com/simonscabello/meu-auto-backend/internal/maintenance"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/civil"
 	"github.com/simonscabello/meu-auto-backend/internal/vehicle"
 )
@@ -13,7 +14,26 @@ type Dashboard struct {
 	Vehicle  dashboardVehicle  `json:"vehicle"`
 	Odometer dashboardOdometer `json:"odometer"`
 	Alerts   dashboardAlerts   `json:"alerts"`
+	Profile  dashboardProfile  `json:"profile"`
 	Costs    dashboardCosts    `json:"costs"`
+}
+
+// dashboardProfile is what the main screen needs to decide whether to show one discreet
+// "we still do not know something about your car" card — and nothing more.
+//
+// Counts, not content: the questions themselves live on GET /maintenance-profile. A
+// dashboard that carried them would grow every time a question is added, and the card only
+// ever needs to know there is one.
+type dashboardProfile struct {
+	// unknown (no plan at all — the app says so plainly instead of inventing a schedule)
+	// | incomplete | ready.
+	Status string `json:"status"`
+
+	// False when the vehicle has no fuel type, which is the one gap that blocks deriving
+	// anything about the engine.
+	PowertrainKnown bool `json:"powertrain_known"`
+
+	OpenQuestions int `json:"open_questions"`
 }
 
 type dashboardVehicle struct {
@@ -64,6 +84,7 @@ func buildDashboard(
 	summary vehicle.Summary,
 	alerts []Alert,
 	needsBaseline int,
+	profile maintenance.Profile,
 	costs db.SumVehicleCostsRow,
 	costMonths int32,
 	since time.Time,
@@ -105,6 +126,11 @@ func buildDashboard(
 			DueSoon:       dueSoon,
 			NeedsBaseline: needsBaseline,
 			Items:         top,
+		},
+		Profile: dashboardProfile{
+			Status:          profile.Status,
+			PowertrainKnown: profile.PowertrainKnown,
+			OpenQuestions:   len(profile.Questions),
 		},
 		Costs: dashboardCosts{
 			PeriodMonths:     costMonths,

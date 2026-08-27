@@ -27,7 +27,7 @@ func (s *Service) authorizePlan(ctx context.Context, userID, planID uuid.UUID) (
 		return db.GetMaintenancePlanRow{}, apperr.Internal(err)
 	}
 
-	if _, _, err := s.vehicle.AuthorizeVehicle(ctx, userID, plan.VehicleID); err != nil {
+	if _, _, _, err := s.vehicle.AuthorizeVehicleForPlanning(ctx, userID, plan.VehicleID); err != nil {
 		// The vehicle is not the caller's, so neither is the plan. Report it the same way
 		// a missing plan is reported.
 		return db.GetMaintenancePlanRow{}, errPlanNotFound()

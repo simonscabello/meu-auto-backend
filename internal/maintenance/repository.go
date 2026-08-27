@@ -86,20 +86,45 @@ func (r *Repository) CreateCustomItem(ctx context.Context, params db.CreateCusto
 
 // ---------- plans ----------
 
-// InitializePlans materialises the suggested catalogue for a new vehicle (SPEC.md RN-09).
+// InitializePlans materialises the suggested catalogue for a vehicle (SPEC.md RN-09),
+// filtered by what the vehicle actually has.
+//
+// `suggest_by_default` says an item is worth offering. It does NOT say the vehicle has the
+// component, and treating it as though it did is what put a timing belt, spark plugs and an
+// oil change on every car in the database — including electric ones.
+//
+// Three outcomes per item, and the third is the one that matters:
+//
+//	the vehicle has it     a normal plan, with the catalogue defaults
+//	the vehicle does not   a plan marked not_applicable, so the item is off every screen
+//	                       and the decision is still undoable
+//	we cannot tell         NO ROW. A row would be a claim, and we do not have one.
+//
+// Idempotent: ON CONFLICT DO NOTHING means re-running it after the owner fills in a missing
+// fuel type adds what is now derivable and touches nothing that already exists.
 //
 // Alert thresholds are derived from the interval rather than stored per item: a plan that
 // comes due every 15 days cannot warn 15 days ahead, and one due every 60.000 km should
 // not warn at 500. A tenth of the interval, clamped to sane bounds, works for both.
-func (r *Repository) InitializePlans(ctx context.Context, vehicleID uuid.UUID, vehicleType string) (int, error) {
+func (r *Repository) InitializePlans(ctx context.Context, vehicleID uuid.UUID, vehicleType string, fuelType *string) (int, error) {
 	items, err := r.queries.ListSuggestedMaintenanceItems(ctx, vehicleType)
 	if err != nil {
 		return 0, fmt.Errorf("list suggested items: %w", err)
 	}
 
+	powertrain := PowertrainFor(fuelType)
+
 	created := 0
 	err = r.inTx(ctx, func(q *db.Queries) error {
 		for _, item := range items {
+			strategy, ok := strategyFor(item.DefaultStrategy, powertrain.Applies(item.PowertrainRequirement))
+			if !ok {
+				continue
+			}
+
+			// The intervals are kept even on a not-applicable plan. Nothing reads them
+			// while it is off — the due engine short-circuits — and keeping them is what
+			// makes "na verdade meu carro tem sim" one tap rather than a re-entry.
 			_, err := q.CreateMaintenancePlan(ctx, db.CreateMaintenancePlanParams{
 				ID:                uuid.New(),
 				VehicleID:         vehicleID,
@@ -110,6 +135,7 @@ func (r *Repository) InitializePlans(ctx context.Context, vehicleID uuid.UUID, v
 				AlertKm:           alertKmFor(item.DefaultIntervalKm),
 				AlertDays:         alertDaysFor(item.DefaultIntervalMonths, item.DefaultIntervalDays),
 				Origin:            OriginSuggested,
+				Strategy:          strategy,
 			})
 			// ON CONFLICT DO NOTHING returns no row when the plan already exists, which
 			// makes running this twice harmless.
@@ -121,6 +147,31 @@ func (r *Repository) InitializePlans(ctx context.Context, vehicleID uuid.UUID, v
 			}
 			created++
 		}
+
+		// Re-running this after the owner corrects the fuel type has to correct the plans
+		// too, not just add missing ones: ON CONFLICT DO NOTHING would leave an oil change
+		// on a car that now says it is electric, which is the false recommendation this
+		// whole change exists to remove.
+		//
+		// Both directions, both guarded by origin <> 'user'. On a first run there is
+		// nothing to move and both are no-ops.
+		satisfied, unsatisfied := powertrain.requirementsByVerdict()
+		if len(unsatisfied) > 0 {
+			if _, err := q.DemoteImpossiblePlans(ctx, db.DemoteImpossiblePlansParams{
+				VehicleID:    vehicleID,
+				Requirements: unsatisfied,
+			}); err != nil {
+				return fmt.Errorf("demote impossible plans: %w", err)
+			}
+		}
+		if len(satisfied) > 0 {
+			if _, err := q.RestorePossiblePlans(ctx, db.RestorePossiblePlansParams{
+				VehicleID:    vehicleID,
+				Requirements: satisfied,
+			}); err != nil {
+				return fmt.Errorf("restore possible plans: %w", err)
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -129,12 +180,115 @@ func (r *Repository) InitializePlans(ctx context.Context, vehicleID uuid.UUID, v
 	return created, nil
 }
 
-func (r *Repository) ListPlans(ctx context.Context, vehicleID uuid.UUID) ([]db.ListMaintenancePlansForVehicleRow, error) {
-	plans, err := r.queries.ListMaintenancePlansForVehicle(ctx, vehicleID)
+// ListPlans returns the vehicle plans. includeNotApplicable is false everywhere except the
+// configuration surface: an item the car does not have is absent, not greyed out.
+func (r *Repository) ListPlans(ctx context.Context, vehicleID uuid.UUID, includeNotApplicable bool) ([]db.ListMaintenancePlansForVehicleRow, error) {
+	plans, err := r.queries.ListMaintenancePlansForVehicle(ctx, db.ListMaintenancePlansForVehicleParams{
+		VehicleID:            vehicleID,
+		IncludeNotApplicable: includeNotApplicable,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list maintenance plans: %w", err)
 	}
 	return plans, nil
+}
+
+// ---------- profile ----------
+
+// ProfileAnswers is what the owner has already told us about this vehicle, keyed by
+// question id. An entry whose value is AnswerUnknown is still an answer: it is what stops
+// the question being asked again.
+func (r *Repository) ProfileAnswers(ctx context.Context, vehicleID uuid.UUID) (map[string]string, error) {
+	rows, err := r.queries.ListVehicleProfileAnswers(ctx, vehicleID)
+	if err != nil {
+		return nil, fmt.Errorf("list vehicle profile answers: %w", err)
+	}
+
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		out[row.Question] = row.Answer
+	}
+	return out, nil
+}
+
+// GlobalItemsBySlug resolves the catalogue entries a profile answer decides.
+func (r *Repository) GlobalItemsBySlug(ctx context.Context, slugs []string) (map[string]db.MaintenanceItem, error) {
+	if len(slugs) == 0 {
+		return map[string]db.MaintenanceItem{}, nil
+	}
+
+	items, err := r.queries.ListGlobalMaintenanceItemsBySlug(ctx, slugs)
+	if err != nil {
+		return nil, fmt.Errorf("list global items by slug: %w", err)
+	}
+
+	out := make(map[string]db.MaintenanceItem, len(items))
+	for _, item := range items {
+		out[item.Slug] = item
+	}
+	return out, nil
+}
+
+// ApplyProfileAnswer stores the answer and the plans it decides, in one transaction.
+//
+// Atomic because half of it is a lie: an answer recorded without its plans leaves the
+// vehicle claiming a configuration nothing acts on, and plans written without the answer
+// make the question come back and overwrite them again.
+//
+// Everything written here is origin "user". The owner looked at their car and told us; that
+// outranks any default, and it is what stops a future refresh of the suggested catalogue
+// from undoing it.
+func (r *Repository) ApplyProfileAnswer(
+	ctx context.Context,
+	vehicleID uuid.UUID,
+	question, answer string,
+	applicable, notApplicable []db.MaintenanceItem,
+) error {
+	return r.inTx(ctx, func(q *db.Queries) error {
+		if _, err := q.UpsertVehicleProfileAnswer(ctx, db.UpsertVehicleProfileAnswerParams{
+			VehicleID: vehicleID,
+			Question:  question,
+			Answer:    answer,
+			Source:    OriginUser,
+		}); err != nil {
+			return fmt.Errorf("save vehicle profile answer: %w", err)
+		}
+
+		for _, item := range applicable {
+			strategy := item.DefaultStrategy
+			if strategy == "" {
+				strategy = StrategyPeriodic
+			}
+			if err := upsertApplicability(ctx, q, vehicleID, item, strategy); err != nil {
+				return err
+			}
+		}
+		for _, item := range notApplicable {
+			if err := upsertApplicability(ctx, q, vehicleID, item, StrategyNotApplicable); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func upsertApplicability(ctx context.Context, q *db.Queries, vehicleID uuid.UUID, item db.MaintenanceItem, strategy string) error {
+	_, err := q.UpsertMaintenancePlanApplicability(ctx, db.UpsertMaintenancePlanApplicabilityParams{
+		ID:                uuid.New(),
+		VehicleID:         vehicleID,
+		MaintenanceItemID: item.ID,
+		IntervalKm:        item.DefaultIntervalKm,
+		IntervalMonths:    item.DefaultIntervalMonths,
+		IntervalDays:      item.DefaultIntervalDays,
+		AlertKm:           alertKmFor(item.DefaultIntervalKm),
+		AlertDays:         alertDaysFor(item.DefaultIntervalMonths, item.DefaultIntervalDays),
+		Origin:            OriginUser,
+		Strategy:          strategy,
+	})
+	if err != nil {
+		return fmt.Errorf("upsert plan applicability: %w", err)
+	}
+	return nil
 }
 
 func (r *Repository) PlanByID(ctx context.Context, planID uuid.UUID) (db.GetMaintenancePlanRow, error) {

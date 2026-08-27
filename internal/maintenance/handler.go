@@ -35,6 +35,9 @@ func (h *Handler) Mount(r chi.Router) {
 
 		r.Get("/vehicles/{vehicleID}/maintenance-plans", h.listPlans)
 		r.Post("/vehicles/{vehicleID}/maintenance-plans", h.createPlan)
+
+		r.Get("/vehicles/{vehicleID}/maintenance-profile", h.getProfile)
+		r.Post("/vehicles/{vehicleID}/maintenance-profile/answers", h.answerProfile)
 		r.Get("/vehicles/{vehicleID}/maintenance-records", h.listRecords)
 		r.Post("/vehicles/{vehicleID}/maintenance-records", h.createRecord)
 
@@ -108,7 +111,12 @@ func (h *Handler) listPlans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dues, err := h.service.ListPlans(r.Context(), userID, vehicleID)
+	// Absent, "false" and "0" all mean the same thing, and that default is the product
+	// decision: the screens that ask "what does my car need" must not see an item the car
+	// does not have. Only the configuration surface opts in.
+	includeNotApplicable := httpx.QueryBool(r, "include_not_applicable")
+
+	dues, err := h.service.ListPlans(r.Context(), userID, vehicleID, includeNotApplicable)
 	if err != nil {
 		httpx.Error(w, r, err)
 		return
@@ -185,6 +193,47 @@ func (h *Handler) deletePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.NoContent(w)
+}
+
+// ---------- profile ----------
+
+func (h *Handler) getProfile(w http.ResponseWriter, r *http.Request) {
+	userID, vehicleID, err := callerAndVehicle(r)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+
+	profile, err := h.service.Profile(r.Context(), userID, vehicleID)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toProfileResponse(profile))
+}
+
+func (h *Handler) answerProfile(w http.ResponseWriter, r *http.Request) {
+	userID, vehicleID, err := callerAndVehicle(r)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+
+	req, err := httpx.DecodeBody[answerProfileRequest](r)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+
+	// The whole profile comes back, not just the answer: an answer changes which plans
+	// exist, and making the app fetch again to find out would leave a window where the
+	// screen and the server disagree.
+	profile, err := h.service.AnswerProfileQuestion(r.Context(), userID, vehicleID, req)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toProfileResponse(profile))
 }
 
 // ---------- records ----------
@@ -304,6 +353,9 @@ func toBarePlanResponse(plan db.MaintenancePlan) map[string]any {
 		"alert_km":            plan.AlertKm,
 		"alert_days":          plan.AlertDays,
 		"origin":              plan.Origin,
+		"strategy":            plan.Strategy,
+		"history_status":      plan.HistoryStatus,
+		"notes":               plan.Notes,
 	}
 }
 

@@ -5,6 +5,7 @@
         "default_interval_days": "null|number",
         "default_interval_km": "null|number",
         "default_interval_months": "null|number",
+        "default_strategy": "string",
         "id": "string",
         "is_custom": "boolean",
         "kind": "string",

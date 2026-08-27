@@ -20,9 +20,13 @@ import (
 // not want. The errors that come back are already apperr values, so they propagate
 // unchanged.
 type VehiclePort interface {
-	// AuthorizeVehicle reports the vehicle's type and current mileage, or a not-found
-	// error if the caller may not touch it.
-	AuthorizeVehicle(ctx context.Context, userID, vehicleID uuid.UUID) (vehicleType string, currentMileageKm int32, err error)
+	// AuthorizeVehicleForPlanning reports the vehicle's type, its declared fuel and its
+	// current mileage, or a not-found error if the caller may not touch it.
+	//
+	// The fuel type is here because it is the only automatic source of applicability this
+	// module has: an electric car has no engine oil because it has no engine. nil means
+	// the owner never said, which resolves to "unknown" and never to a guess.
+	AuthorizeVehicleForPlanning(ctx context.Context, userID, vehicleID uuid.UUID) (vehicleType string, fuelType *string, currentMileageKm int32, err error)
 
 	// CheckOdometerConsistency applies SPEC.md RN-01 to a mileage a maintenance record is
 	// about to assert. Shared rather than reimplemented, so there is one definition of
@@ -100,20 +104,30 @@ func (s *Service) CreateItem(ctx context.Context, userID uuid.UUID, req createIt
 //
 // No authorisation check: it is called by the vehicle module immediately after it created
 // the vehicle, never from a request path.
-func (s *Service) InitializeVehiclePlans(ctx context.Context, vehicleID uuid.UUID, vehicleType string) error {
-	_, err := s.repo.InitializePlans(ctx, vehicleID, vehicleType)
+func (s *Service) InitializeVehiclePlans(ctx context.Context, vehicleID uuid.UUID, vehicleType string, fuelType *string) error {
+	_, err := s.repo.InitializePlans(ctx, vehicleID, vehicleType, fuelType)
 	return err
 }
 
-// ListPlans returns every plan on a vehicle with its computed due state, ordered by
+// ListPlans returns the plans on a vehicle with their computed due state, ordered by
 // urgency.
-func (s *Service) ListPlans(ctx context.Context, userID, vehicleID uuid.UUID) ([]Due, error) {
-	_, currentMileageKm, err := s.vehicle.AuthorizeVehicle(ctx, userID, vehicleID)
+//
+// includeNotApplicable is false for every screen that answers "what does my car need". An
+// item the vehicle does not have is simply not in the list — not a disabled card, not a
+// greyed-out row. Only the configuration surface passes true, because undoing has to be
+// possible.
+func (s *Service) ListPlans(ctx context.Context, userID, vehicleID uuid.UUID, includeNotApplicable bool) ([]Due, error) {
+	_, _, currentMileageKm, err := s.vehicle.AuthorizeVehicleForPlanning(ctx, userID, vehicleID)
 	if err != nil {
 		return nil, err
 	}
+	return s.listPlans(ctx, vehicleID, currentMileageKm, includeNotApplicable)
+}
 
-	rows, err := s.repo.ListPlans(ctx, vehicleID)
+// listPlans is the authorised half, split out so Profile can reuse it after a single
+// authorisation rather than paying for a second one.
+func (s *Service) listPlans(ctx context.Context, vehicleID uuid.UUID, currentMileageKm int32, includeNotApplicable bool) ([]Due, error) {
+	rows, err := s.repo.ListPlans(ctx, vehicleID, includeNotApplicable)
 	if err != nil {
 		return nil, apperr.Internal(err)
 	}
@@ -126,25 +140,102 @@ func (s *Service) ListPlans(ctx context.Context, userID, vehicleID uuid.UUID) ([
 	plans := make([]Plan, 0, len(rows))
 	for _, row := range rows {
 		plans = append(plans, Plan{
-			ID:             row.ID,
-			ItemID:         row.MaintenanceItemID,
-			ItemSlug:       row.ItemSlug,
-			ItemName:       row.ItemName,
-			ItemKind:       row.ItemKind,
-			Origin:         row.Origin,
-			IntervalKm:     row.IntervalKm,
-			IntervalMonths: row.IntervalMonths,
-			IntervalDays:   row.IntervalDays,
-			AlertKm:        row.AlertKm,
-			AlertDays:      row.AlertDays,
+			ID:              row.ID,
+			ItemID:          row.MaintenanceItemID,
+			ItemSlug:        row.ItemSlug,
+			ItemName:        row.ItemName,
+			ItemKind:        row.ItemKind,
+			Origin:          row.Origin,
+			Strategy:        row.Strategy,
+			HistoryStatus:   row.HistoryStatus,
+			Notes:           row.Notes,
+			HistoryQuestion: row.ItemHistoryQuestion,
+			HistoryPriority: row.ItemHistoryPriority,
+			IntervalKm:      row.IntervalKm,
+			IntervalMonths:  row.IntervalMonths,
+			IntervalDays:    row.IntervalDays,
+			AlertKm:         row.AlertKm,
+			AlertDays:       row.AlertDays,
 		})
 	}
 
 	return ComputeAll(plans, lastByItem, currentMileageKm, s.today()), nil
 }
 
+// ---------- profile ----------
+
+// Profile answers "what does this vehicle actually need, and what do we still not know?".
+//
+// It reads the plans INCLUDING the not-applicable ones, because it is the one caller that
+// has to count them and offer to undo one.
+func (s *Service) Profile(ctx context.Context, userID, vehicleID uuid.UUID) (Profile, error) {
+	_, fuelType, currentMileageKm, err := s.vehicle.AuthorizeVehicleForPlanning(ctx, userID, vehicleID)
+	if err != nil {
+		return Profile{}, err
+	}
+
+	dues, err := s.listPlans(ctx, vehicleID, currentMileageKm, true)
+	if err != nil {
+		return Profile{}, err
+	}
+
+	answers, err := s.repo.ProfileAnswers(ctx, vehicleID)
+	if err != nil {
+		return Profile{}, apperr.Internal(err)
+	}
+
+	return buildProfile(PowertrainFor(fuelType), dues, answers), nil
+}
+
+// AnswerProfileQuestion records what the owner said about how their car is built and
+// applies it to the plans.
+//
+// "Não sei" is a real answer and takes this same path: it is stored, it stops the question
+// coming back, and it creates no plan on either side. Recording nothing would be
+// indistinguishable from never having asked, which is how the old flow ended up asking the
+// same thing forever.
+func (s *Service) AnswerProfileQuestion(ctx context.Context, userID, vehicleID uuid.UUID, req answerProfileRequest) (Profile, error) {
+	if _, _, _, err := s.vehicle.AuthorizeVehicleForPlanning(ctx, userID, vehicleID); err != nil {
+		return Profile{}, err
+	}
+
+	question, option, err := req.normalizeAndValidate()
+	if err != nil {
+		return Profile{}, err
+	}
+
+	slugs := append(append([]string{}, option.Applicable...), option.NotApplicable...)
+	items, err := s.repo.GlobalItemsBySlug(ctx, slugs)
+	if err != nil {
+		return Profile{}, apperr.Internal(err)
+	}
+
+	// A slug the catalogue does not have is a seeding problem, not the caller's. Skip it
+	// rather than failing the answer: recording "corrente" is still worth more than
+	// refusing because one of the two rows is missing.
+	applicable := itemsFor(items, option.Applicable)
+	notApplicable := itemsFor(items, option.NotApplicable)
+
+	if err := s.repo.ApplyProfileAnswer(ctx, vehicleID, question.ID, option.Value,
+		applicable, notApplicable); err != nil {
+		return Profile{}, apperr.Internal(err)
+	}
+
+	return s.Profile(ctx, userID, vehicleID)
+}
+
+func itemsFor(byslug map[string]db.MaintenanceItem, slugs []string) []db.MaintenanceItem {
+	out := make([]db.MaintenanceItem, 0, len(slugs))
+	for _, slug := range slugs {
+		if item, ok := byslug[slug]; ok {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 func (s *Service) CreatePlan(ctx context.Context, userID, vehicleID uuid.UUID, req createPlanRequest) (db.MaintenancePlan, error) {
-	if _, _, err := s.vehicle.AuthorizeVehicle(ctx, userID, vehicleID); err != nil {
+	if _, _, _, err := s.vehicle.AuthorizeVehicleForPlanning(ctx, userID, vehicleID); err != nil {
 		return db.MaintenancePlan{}, err
 	}
 	if err := req.validate(); err != nil {
@@ -186,6 +277,14 @@ func (s *Service) CreatePlan(ctx context.Context, userID, vehicleID uuid.UUID, r
 		planID = parsed
 	}
 
+	// The strategy falls back to the item's, so adding a plan stays "name the item". The
+	// catalogue knows a tyre is replaced on wear and a timing belt on a schedule; making
+	// the owner restate it would be a question with an obvious answer.
+	strategy := valueOr(req.Strategy, item.DefaultStrategy)
+	if strategy == "" {
+		strategy = StrategyPeriodic
+	}
+
 	plan, err := s.repo.CreatePlan(ctx, db.CreateMaintenancePlanParams{
 		ID:                planID,
 		VehicleID:         vehicleID,
@@ -196,6 +295,8 @@ func (s *Service) CreatePlan(ctx context.Context, userID, vehicleID uuid.UUID, r
 		AlertKm:           valueOr(req.AlertKm, alertKmFor(intervalKm)),
 		AlertDays:         valueOr(req.AlertDays, alertDaysFor(intervalMonths, intervalDays)),
 		Origin:            OriginUser,
+		Strategy:          strategy,
+		Notes:             req.Notes,
 	})
 	switch {
 	case errors.Is(err, ErrIDTaken):
@@ -223,6 +324,10 @@ func (s *Service) UpdatePlan(ctx context.Context, userID, planID uuid.UUID, req 
 		IntervalDays:   req.IntervalDays,
 		AlertKm:        req.AlertKm,
 		AlertDays:      req.AlertDays,
+		Strategy:       req.Strategy,
+		HistoryStatus:  req.HistoryStatus,
+		Notes:          req.Notes,
+		ClearNotes:     req.ClearNotes,
 	})
 	switch {
 	case errors.Is(err, ErrPlanNotFound):
@@ -251,7 +356,7 @@ func (s *Service) DeletePlan(ctx context.Context, userID, planID uuid.UUID) erro
 
 // CreateRecord logs a service that happened, with its line items.
 func (s *Service) CreateRecord(ctx context.Context, userID, vehicleID uuid.UUID, req createRecordRequest) (db.MaintenanceRecord, []db.ListMaintenanceRecordItemsRow, bool, error) {
-	if _, _, err := s.vehicle.AuthorizeVehicle(ctx, userID, vehicleID); err != nil {
+	if _, _, _, err := s.vehicle.AuthorizeVehicleForPlanning(ctx, userID, vehicleID); err != nil {
 		return db.MaintenanceRecord{}, nil, false, err
 	}
 	if err := req.normalizeAndValidate(s.today()); err != nil {
@@ -355,7 +460,7 @@ func (s *Service) GetRecord(ctx context.Context, userID, recordID uuid.UUID) (db
 
 // ListRecords returns one page of history with every record's lines attached.
 func (s *Service) ListRecords(ctx context.Context, userID, vehicleID uuid.UUID, pageSize int32, rawCursor string) ([]db.MaintenanceRecord, map[uuid.UUID][]db.ListMaintenanceRecordItemsRow, *string, error) {
-	if _, _, err := s.vehicle.AuthorizeVehicle(ctx, userID, vehicleID); err != nil {
+	if _, _, _, err := s.vehicle.AuthorizeVehicleForPlanning(ctx, userID, vehicleID); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -485,7 +590,7 @@ func valueOr[T any](value *T, fallback T) T {
 // Consumed by the insight module for the alerts screen (SPEC.md RN-06: a warranty expiry is
 // derived, never stored).
 func (s *Service) ListWarranties(ctx context.Context, userID, vehicleID uuid.UUID) ([]Warranty, error) {
-	_, currentMileageKm, err := s.vehicle.AuthorizeVehicle(ctx, userID, vehicleID)
+	_, _, currentMileageKm, err := s.vehicle.AuthorizeVehicleForPlanning(ctx, userID, vehicleID)
 	if err != nil {
 		return nil, err
 	}
