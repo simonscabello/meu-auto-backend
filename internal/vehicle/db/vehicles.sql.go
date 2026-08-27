@@ -41,27 +41,34 @@ const createVehicle = `-- name: CreateVehicle :one
 INSERT INTO vehicles (
     id, vehicle_type, brand, model, version,
     manufacture_year, model_year, plate, renavam, chassis,
-    fuel_type, color, nickname
+    fuel_type, color, nickname, fipe_code,
+    -- The link to the catalogue entry the owner picked. Always nullable: a vehicle typed
+    -- in by hand is still a vehicle, and the app already installed never sends these.
+    catalog_brand_id, catalog_model_id, catalog_model_year_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 ON CONFLICT (id) DO NOTHING
-RETURNING vehicle_type, id, brand, model, version, manufacture_year, model_year, plate, renavam, chassis, fuel_type, color, nickname, fipe_code, current_mileage_km, current_mileage_at, created_at, updated_at, deleted_at
+RETURNING vehicle_type, id, brand, model, version, manufacture_year, model_year, plate, renavam, chassis, fuel_type, color, nickname, fipe_code, current_mileage_km, current_mileage_at, created_at, updated_at, deleted_at, catalog_brand_id, catalog_model_id, catalog_model_year_id
 `
 
 type CreateVehicleParams struct {
-	ID              uuid.UUID
-	VehicleType     string
-	Brand           string
-	Model           string
-	Version         *string
-	ManufactureYear *int32
-	ModelYear       *int32
-	Plate           *string
-	Renavam         *string
-	Chassis         *string
-	FuelType        *string
-	Color           *string
-	Nickname        *string
+	ID                 uuid.UUID
+	VehicleType        string
+	Brand              string
+	Model              string
+	Version            *string
+	ManufactureYear    *int32
+	ModelYear          *int32
+	Plate              *string
+	Renavam            *string
+	Chassis            *string
+	FuelType           *string
+	Color              *string
+	Nickname           *string
+	FipeCode           *string
+	CatalogBrandID     *uuid.UUID
+	CatalogModelID     *uuid.UUID
+	CatalogModelYearID *uuid.UUID
 }
 
 // The id comes from the client (UUIDv7). ON CONFLICT DO NOTHING makes a retried create
@@ -81,6 +88,10 @@ func (q *Queries) CreateVehicle(ctx context.Context, arg CreateVehicleParams) (V
 		arg.FuelType,
 		arg.Color,
 		arg.Nickname,
+		arg.FipeCode,
+		arg.CatalogBrandID,
+		arg.CatalogModelID,
+		arg.CatalogModelYearID,
 	)
 	var i Vehicle
 	err := row.Scan(
@@ -103,6 +114,9 @@ func (q *Queries) CreateVehicle(ctx context.Context, arg CreateVehicleParams) (V
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.CatalogBrandID,
+		&i.CatalogModelID,
+		&i.CatalogModelYearID,
 	)
 	return i, err
 }
@@ -139,7 +153,7 @@ func (q *Queries) DeleteVehiclesOwnedSolelyBy(ctx context.Context, userID uuid.U
 }
 
 const getVehicleForUser = `-- name: GetVehicleForUser :one
-SELECT v.vehicle_type, v.id, v.brand, v.model, v.version, v.manufacture_year, v.model_year, v.plate, v.renavam, v.chassis, v.fuel_type, v.color, v.nickname, v.fipe_code, v.current_mileage_km, v.current_mileage_at, v.created_at, v.updated_at, v.deleted_at
+SELECT v.vehicle_type, v.id, v.brand, v.model, v.version, v.manufacture_year, v.model_year, v.plate, v.renavam, v.chassis, v.fuel_type, v.color, v.nickname, v.fipe_code, v.current_mileage_km, v.current_mileage_at, v.created_at, v.updated_at, v.deleted_at, v.catalog_brand_id, v.catalog_model_id, v.catalog_model_year_id
 FROM vehicles v
 JOIN vehicle_ownerships o ON o.vehicle_id = v.id
 WHERE v.id = $1
@@ -178,12 +192,15 @@ func (q *Queries) GetVehicleForUser(ctx context.Context, arg GetVehicleForUserPa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.CatalogBrandID,
+		&i.CatalogModelID,
+		&i.CatalogModelYearID,
 	)
 	return i, err
 }
 
 const listVehiclesForUser = `-- name: ListVehiclesForUser :many
-SELECT v.vehicle_type, v.id, v.brand, v.model, v.version, v.manufacture_year, v.model_year, v.plate, v.renavam, v.chassis, v.fuel_type, v.color, v.nickname, v.fipe_code, v.current_mileage_km, v.current_mileage_at, v.created_at, v.updated_at, v.deleted_at
+SELECT v.vehicle_type, v.id, v.brand, v.model, v.version, v.manufacture_year, v.model_year, v.plate, v.renavam, v.chassis, v.fuel_type, v.color, v.nickname, v.fipe_code, v.current_mileage_km, v.current_mileage_at, v.created_at, v.updated_at, v.deleted_at, v.catalog_brand_id, v.catalog_model_id, v.catalog_model_year_id
 FROM vehicles v
 JOIN vehicle_ownerships o ON o.vehicle_id = v.id
 WHERE o.user_id = $1
@@ -221,6 +238,9 @@ func (q *Queries) ListVehiclesForUser(ctx context.Context, userID uuid.UUID) ([]
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.CatalogBrandID,
+			&i.CatalogModelID,
+			&i.CatalogModelYearID,
 		); err != nil {
 			return nil, err
 		}
@@ -261,24 +281,38 @@ SET brand            = COALESCE($1, brand),
     fuel_type        = COALESCE($9, fuel_type),
     color            = COALESCE($10, color),
     nickname         = COALESCE($11, nickname),
+    fipe_code        = COALESCE($12, fipe_code),
+
+    -- The three move together or not at all. They are resolved from a single
+    -- catalog_model_year_id, so a partial update could not produce a brand that disagrees
+    -- with its model — but writing them as one group is what keeps that true if somebody
+    -- later adds a second way in.
+    catalog_brand_id      = COALESCE($13, catalog_brand_id),
+    catalog_model_id      = COALESCE($14, catalog_model_id),
+    catalog_model_year_id = COALESCE($15, catalog_model_year_id),
+
     updated_at       = now()
-WHERE id = $12 AND deleted_at IS NULL
-RETURNING vehicle_type, id, brand, model, version, manufacture_year, model_year, plate, renavam, chassis, fuel_type, color, nickname, fipe_code, current_mileage_km, current_mileage_at, created_at, updated_at, deleted_at
+WHERE id = $16 AND deleted_at IS NULL
+RETURNING vehicle_type, id, brand, model, version, manufacture_year, model_year, plate, renavam, chassis, fuel_type, color, nickname, fipe_code, current_mileage_km, current_mileage_at, created_at, updated_at, deleted_at, catalog_brand_id, catalog_model_id, catalog_model_year_id
 `
 
 type UpdateVehicleParams struct {
-	Brand           *string
-	Model           *string
-	Version         *string
-	ManufactureYear *int32
-	ModelYear       *int32
-	Plate           *string
-	Renavam         *string
-	Chassis         *string
-	FuelType        *string
-	Color           *string
-	Nickname        *string
-	ID              uuid.UUID
+	Brand              *string
+	Model              *string
+	Version            *string
+	ManufactureYear    *int32
+	ModelYear          *int32
+	Plate              *string
+	Renavam            *string
+	Chassis            *string
+	FuelType           *string
+	Color              *string
+	Nickname           *string
+	FipeCode           *string
+	CatalogBrandID     *uuid.UUID
+	CatalogModelID     *uuid.UUID
+	CatalogModelYearID *uuid.UUID
+	ID                 uuid.UUID
 }
 
 // PATCH semantics: a NULL argument leaves the column untouched. The trade-off is that an
@@ -297,6 +331,10 @@ func (q *Queries) UpdateVehicle(ctx context.Context, arg UpdateVehicleParams) (V
 		arg.FuelType,
 		arg.Color,
 		arg.Nickname,
+		arg.FipeCode,
+		arg.CatalogBrandID,
+		arg.CatalogModelID,
+		arg.CatalogModelYearID,
 		arg.ID,
 	)
 	var i Vehicle
@@ -320,6 +358,9 @@ func (q *Queries) UpdateVehicle(ctx context.Context, arg UpdateVehicleParams) (V
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.CatalogBrandID,
+		&i.CatalogModelID,
+		&i.CatalogModelYearID,
 	)
 	return i, err
 }

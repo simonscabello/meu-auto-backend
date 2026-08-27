@@ -1,0 +1,12 @@
+{
+  "body": {
+    "error": {
+      "code": "string",
+      "details": {
+        "request_id": "string"
+      },
+      "message": "string"
+    }
+  },
+  "status": 503
+}

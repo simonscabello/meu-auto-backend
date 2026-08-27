@@ -1,26 +1,26 @@
 {
   "body": {
     "brand": "string",
-    "catalog_brand_id": "null",
-    "catalog_model_id": "null",
-    "catalog_model_year_id": "null",
-    "chassis": "string",
-    "color": "string",
+    "catalog_brand_id": "string",
+    "catalog_model_id": "string",
+    "catalog_model_year_id": "string",
+    "chassis": "null",
+    "color": "null",
     "created_at": "string",
     "current_mileage_at": "string",
     "current_mileage_km": "number",
-    "fipe_code": "null",
+    "fipe_code": "string",
     "fuel_type": "string",
     "id": "string",
-    "manufacture_year": "number",
+    "manufacture_year": "null",
     "model": "string",
     "model_year": "number",
-    "nickname": "string",
-    "plate": "string",
-    "renavam": "string",
+    "nickname": "null",
+    "plate": "null",
+    "renavam": "null",
     "updated_at": "string",
     "vehicle_type": "string",
-    "version": "string"
+    "version": "null"
   },
   "status": 201
 }

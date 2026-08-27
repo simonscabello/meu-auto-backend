@@ -21,7 +21,13 @@ var statusByCode = map[apperr.Code]int{
 	apperr.CodeConflict:         http.StatusConflict,
 	apperr.CodeOdometerRollback: http.StatusUnprocessableEntity,
 	apperr.CodeRateLimited:      http.StatusTooManyRequests,
-	apperr.CodeInternal:         http.StatusInternalServerError,
+
+	// 503, not 500. Nothing here is broken and the request is worth repeating, which is
+	// exactly what the status is for — and it keeps a supplier's bad afternoon out of the
+	// 5xx rate that says our own code is failing.
+	apperr.CodeUpstreamUnavailable: http.StatusServiceUnavailable,
+
+	apperr.CodeInternal: http.StatusInternalServerError,
 }
 
 // errorBody is the wire format for every error response. It is contract — see SPEC.md

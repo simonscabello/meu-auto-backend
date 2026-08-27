@@ -36,7 +36,12 @@ const goldenDir = "../golden"
 
 func TestGoldenResponses(t *testing.T) {
 	t.Parallel()
-	e := newEnv(t)
+
+	// The vehicle catalogue is snapshotted too, so it needs a provider. The stand-in
+	// serves the real payload shapes, which is what makes the recorded response shape the
+	// one a device will actually receive.
+	fipe := newFakeFipe(t)
+	e := newEnv(t, withFipeServer(fipe.URL))
 
 	// ---------- identity ----------
 
@@ -65,6 +70,29 @@ func TestGoldenResponses(t *testing.T) {
 		"refresh_token": session.RefreshToken,
 	}).expect(http.StatusOK))
 
+	// ---------- vehicle catalogue ----------
+	//
+	// Snapshotted before the vehicle, because the vehicle below is registered from it —
+	// which is the order the app performs, too.
+
+	brands := u.catalogList("/v1/vehicle-brands")
+	assertGolden(t, "catalog_brands_list",
+		u.get("/v1/vehicle-brands").expect(http.StatusOK))
+
+	brandID := findByName(t, brands, "Toyota")
+	models := u.catalogList("/v1/vehicle-brands/" + brandID + "/models")
+	assertGolden(t, "catalog_models_list",
+		u.get("/v1/vehicle-brands/"+brandID+"/models").expect(http.StatusOK))
+
+	modelID := findByName(t, models, "PRIUS 1.8 16V 5p Aut. (Híbrido)")
+	years := u.catalogList("/v1/vehicle-models/" + modelID + "/years")
+	assertGolden(t, "catalog_model_years_list",
+		u.get("/v1/vehicle-models/"+modelID+"/years").expect(http.StatusOK))
+
+	yearID := findByName(t, years, "2017 Híbrido")
+	assertGolden(t, "catalog_model_year_detail",
+		u.get("/v1/vehicle-model-years/"+yearID).expect(http.StatusOK))
+
 	// ---------- vehicle ----------
 
 	created := u.post("/v1/vehicles", map[string]any{
@@ -89,6 +117,25 @@ func TestGoldenResponses(t *testing.T) {
 
 	assertGolden(t, "vehicle_get", u.get(vehiclePath).expect(http.StatusOK))
 	assertGolden(t, "vehicles_list", u.get("/v1/vehicles").expect(http.StatusOK))
+
+	// A second vehicle, registered THROUGH the catalogue. Its snapshot records the three
+	// catalogue ids filled in rather than null, so the golden files pin both halves of the
+	// contract: what a hand-typed vehicle looks like, and what a picked one does.
+	//
+	// Created AFTER vehicles_list on purpose. The golden mechanism records the union of
+	// the shapes it sees in an array, so a second vehicle with a different set of optional
+	// fields filled would widen that snapshot — a change in what the fixture happens to
+	// build, dressed up as a change in the contract. The list stays one vehicle so its
+	// diff only ever means something.
+	assertGolden(t, "vehicle_create_from_catalog", u.post("/v1/vehicles", map[string]any{
+		"brand":                 "Toyota",
+		"model":                 "PRIUS 1.8 16V 5p Aut. (Híbrido)",
+		"model_year":            2017,
+		"fuel_type":             "hibrido",
+		"fipe_code":             "002068-2",
+		"catalog_model_year_id": yearID,
+		"current_mileage_km":    30_000,
+	}).expect(http.StatusCreated))
 
 	// ---------- maintenance ----------
 
@@ -183,6 +230,19 @@ func TestGoldenResponses(t *testing.T) {
 
 	assertGolden(t, "error_unauthorized",
 		e.anonymous().get("/v1/me").expectError(http.StatusUnauthorized, "unauthorized"))
+
+	// The upstream failure envelope. It is a code the app has never seen before, so its
+	// shape is worth pinning from the first release: the app must show the message and
+	// offer a retry, never treat it as a bug in itself.
+	//
+	// Volkswagen's model list is the branch this test never walked, so it is the one still
+	// cold enough to reach the provider. Asking for the brands again would be served from
+	// Postgres and return 200 — which is the feature working, not the error to snapshot.
+	fipe.failWith.Store(http.StatusBadGateway)
+	assertGolden(t, "error_upstream_unavailable",
+		u.get("/v1/vehicle-brands/"+findByName(t, brands, "VW - VolksWagen")+"/models").
+			expectError(http.StatusServiceUnavailable, "upstream_unavailable"))
+	fipe.failWith.Store(0)
 
 	// The rollback details carry the numbers the app puts in front of the user, so they
 	// are contract in exactly the same way the fields of a vehicle are.

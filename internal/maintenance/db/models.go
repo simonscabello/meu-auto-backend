@@ -127,25 +127,81 @@ type User struct {
 }
 
 type Vehicle struct {
-	VehicleType      string
-	ID               uuid.UUID
-	Brand            string
-	Model            string
-	Version          *string
-	ManufactureYear  *int32
-	ModelYear        *int32
-	Plate            *string
-	Renavam          *string
-	Chassis          *string
-	FuelType         *string
-	Color            *string
-	Nickname         *string
-	FipeCode         *string
-	CurrentMileageKm int32
-	CurrentMileageAt *time.Time
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	DeletedAt        *time.Time
+	VehicleType        string
+	ID                 uuid.UUID
+	Brand              string
+	Model              string
+	Version            *string
+	ManufactureYear    *int32
+	ModelYear          *int32
+	Plate              *string
+	Renavam            *string
+	Chassis            *string
+	FuelType           *string
+	Color              *string
+	Nickname           *string
+	FipeCode           *string
+	CurrentMileageKm   int32
+	CurrentMileageAt   *time.Time
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	DeletedAt          *time.Time
+	CatalogBrandID     *uuid.UUID
+	CatalogModelID     *uuid.UUID
+	CatalogModelYearID *uuid.UUID
+}
+
+type VehicleBrand struct {
+	ID             uuid.UUID
+	Provider       string
+	VehicleType    string
+	ExternalID     string
+	Name           string
+	SyncedAt       time.Time
+	ModelsSyncedAt *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type VehicleCatalogSync struct {
+	Provider    string
+	VehicleType string
+	SyncedAt    time.Time
+}
+
+type VehicleFipePrice struct {
+	ID             uuid.UUID
+	ModelYearID    uuid.UUID
+	FipeCode       string
+	PriceCents     int64
+	ReferenceMonth time.Time
+	CollectedAt    time.Time
+	CreatedAt      time.Time
+}
+
+type VehicleModel struct {
+	ID            uuid.UUID
+	BrandID       uuid.UUID
+	ExternalID    string
+	Name          string
+	SyncedAt      time.Time
+	YearsSyncedAt *time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type VehicleModelYear struct {
+	ID         uuid.UUID
+	ModelID    uuid.UUID
+	ExternalID string
+	Name       string
+	Year       *int32
+	FuelLabel  *string
+	FuelType   *string
+	FipeCode   *string
+	SyncedAt   time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 type VehicleObligation struct {

@@ -1,0 +1,12 @@
+{
+  "body": {
+    "data": [
+      {
+        "id": "string",
+        "name": "string",
+        "vehicle_type": "string"
+      }
+    ]
+  },
+  "status": 200
+}

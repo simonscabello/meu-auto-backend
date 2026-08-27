@@ -11,6 +11,9 @@
     },
     "vehicle": {
       "brand": "string",
+      "catalog_brand_id": "null",
+      "catalog_model_id": "null",
+      "catalog_model_year_id": "null",
       "chassis": "string",
       "color": "string",
       "created_at": "string",

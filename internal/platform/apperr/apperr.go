@@ -30,7 +30,21 @@ const (
 	CodeConflict         Code = "conflict"
 	CodeOdometerRollback Code = "odometer_rollback"
 	CodeRateLimited      Code = "rate_limited"
-	CodeInternal         Code = "internal"
+
+	// CodeUpstreamUnavailable is a third party we depend on failing to answer — today,
+	// only the vehicle catalogue's FIPE provider.
+	//
+	// Provider-neutral by name, deliberately. A code called "fipe_unavailable" would be a
+	// supplier's name in a contract the app switches on, and changing supplier would then
+	// mean either a lie or a breaking change. The app's correct reaction is the same
+	// either way: this is not your fault, nothing is broken, try again shortly.
+	//
+	// It is NOT CodeRateLimited even when the cause is a quota. That code means the caller
+	// is going too fast; the quota that ran out is ours and shared, and blaming the person
+	// who happened to tap next would be a lie the app repeats to them.
+	CodeUpstreamUnavailable Code = "upstream_unavailable"
+
+	CodeInternal Code = "internal"
 )
 
 // Error is a domain error carrying a stable code, a pt-BR message safe to show the user,

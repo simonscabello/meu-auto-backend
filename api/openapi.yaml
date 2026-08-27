@@ -67,6 +67,8 @@ tags:
     description: A conta do usuário autenticado
   - name: veiculos
     description: Veículos e histórico de quilometragem
+  - name: catalogo
+    description: Catálogo de marcas, modelos e anos, com o valor FIPE
   - name: manutencao
     description: Catálogo, planos preventivos e manutenções realizadas
   - name: prazos
@@ -501,6 +503,126 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
 
   # ---------------------------------------------------------------- manutenção
+  /v1/vehicle-brands:
+    get:
+      operationId: listVehicleBrands
+      tags: [catalogo]
+      summary: Marcas de veículos
+      description: |
+        Primeiro passo do cadastro por seleção: marca → modelo → ano.
+
+        O catálogo é espelhado no banco do Meu Auto e preenchido sob demanda. A primeira
+        requisição de cada ramo busca na fonte externa e persiste; todas as seguintes, para
+        qualquer usuário, são servidas do banco.
+
+        Não há paginação: são cerca de cem marcas, e uma lista completa é o que um seletor
+        precisa.
+      parameters:
+        - name: vehicle_type
+          in: query
+          description: Padrão `car`. Hoje só carros são aceitos, como em `POST /v1/vehicles`.
+          schema: { $ref: "#/components/schemas/VehicleType" }
+      responses:
+        "200":
+          description: As marcas disponíveis
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/VehicleBrand" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+        "503": { $ref: "#/components/responses/UpstreamUnavailable" }
+
+  /v1/vehicle-brands/{brandId}/models:
+    parameters:
+      - name: brandId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listVehicleModels
+      tags: [catalogo]
+      summary: Modelos de uma marca
+      description: |
+        O nome já inclui a versão — `PRIUS 1.8 16V 5p Aut. (Híbrido)` é um valor só. A fonte
+        não separa os dois, e dividir seria adivinhação.
+      responses:
+        "200":
+          description: Os modelos da marca
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/VehicleModel" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/UpstreamUnavailable" }
+
+  /v1/vehicle-models/{modelId}/years:
+    parameters:
+      - name: modelId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: listVehicleModelYears
+      tags: [catalogo]
+      summary: Anos e combustíveis de um modelo
+      description: |
+        Ordenado do mais novo para o mais antigo. A entrada de veículo zero-quilômetro vem
+        primeiro e tem `year: null` — na origem ela é uma faixa de preço, não um ano.
+      responses:
+        "200":
+          description: Os anos do modelo
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/VehicleModelYear" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/UpstreamUnavailable" }
+
+  /v1/vehicle-model-years/{modelYearId}:
+    parameters:
+      - name: modelYearId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getVehicleModelYear
+      tags: [catalogo]
+      summary: Detalhe do veículo escolhido, com o valor FIPE
+      description: |
+        Última tela antes de `POST /v1/vehicles`. Traz a marca, o modelo, o ano, o
+        combustível e o código FIPE — tudo o que o cadastro precisa — mais a avaliação.
+
+        **`fipe_price` pode ser `null` e isso NÃO é erro.** Quando a fonte externa não
+        responde, o resto do objeto vem do banco do Meu Auto e o cadastro continua
+        funcionando; só o valor fica de fora. Um valor guardado antes também pode ser
+        servido: use `collected_at` para saber quando ele foi coletado.
+      responses:
+        "200":
+          description: O veículo do catálogo, com o valor FIPE quando disponível
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VehicleModelYearDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/maintenance-items:
     get:
       operationId: listMaintenanceItems
@@ -1058,6 +1180,17 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+    UpstreamUnavailable:
+      description: |
+        Um serviço externo do qual esta rota depende não respondeu — hoje, só a fonte do
+        catálogo de veículos.
+
+        Nada está quebrado e nada foi feito de errado pelo usuário: vale tentar de novo em
+        instantes. Não confunda com `rate_limited`, que diz que **este cliente** está indo
+        rápido demais.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
     # ------------------------------------------------------------ erro
@@ -1098,6 +1231,7 @@ components:
         - conflict
         - odometer_rollback
         - rate_limited
+        - upstream_unavailable
         - internal
 
     # ------------------------------------------------------------ enums de domínio
@@ -1297,6 +1431,26 @@ components:
         fuel_type: { $ref: "#/components/schemas/FuelType" }
         color: { type: string, nullable: true, maxLength: 120 }
         nickname: { type: string, nullable: true, maxLength: 120 }
+        catalog_model_year_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: |
+            O `id` de `GET /v1/vehicle-model-years/{modelYearId}`, quando o veículo foi
+            escolhido pelo catálogo. **Opcional e assim permanece** — um veículo digitado à
+            mão é um veículo de primeira classe.
+
+            É o **único** id enviado: a marca e o modelo são derivados dele no servidor, de
+            modo que não existe forma de vincular um modelo a uma marca que não é a dele.
+            Um id que não existe devolve `404`.
+        fipe_code:
+          type: string
+          nullable: true
+          maxLength: 120
+          description: |
+            Cópia do código FIPE no momento do cadastro. Enviado pelo cliente, e é isso que
+            o torna um registro do que o dono confirmou — os campos de texto do veículo são
+            um retrato daquele instante, não uma consulta ao catálogo. Ver `Vehicle`.
         current_mileage_km:
           type: integer
           format: int32
@@ -1319,6 +1473,15 @@ components:
         fuel_type: { $ref: "#/components/schemas/FuelType" }
         color: { type: string, nullable: true, maxLength: 120 }
         nickname: { type: string, nullable: true, maxLength: 120 }
+        catalog_model_year_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: |
+            Revincula o veículo a outra entrada do catálogo — "escolhi a versão errada".
+            Ausente mantém o vínculo atual; não há como desfazê-lo por aqui, pelo mesmo
+            motivo que nenhum opcional pode ser limpo neste PATCH.
+        fipe_code: { type: string, nullable: true, maxLength: 120 }
 
     Vehicle:
       type: object
@@ -1339,6 +1502,22 @@ components:
         color: { type: string, nullable: true }
         nickname: { type: string, nullable: true }
         fipe_code: { type: string, nullable: true }
+
+        # ---- vínculo com o catálogo ----
+        #
+        # Os campos de texto acima (brand, model, version, model_year, fuel_type,
+        # fipe_code) são um RETRATO do que o dono confirmou no cadastro, não um espelho do
+        # catálogo. A fonte externa reescreve as próprias descrições; um histórico de
+        # serviço que se reescreve sozinho quando um fornecedor arruma um texto vale menos
+        # na revenda do que um que não se reescreve.
+        #
+        # Os três ids abaixo respondem "de qual entrada do catálogo veio isto?". São
+        # `null` quando o veículo foi digitado à mão, e continuam válidos como `null` para
+        # sempre.
+        catalog_brand_id: { type: string, format: uuid, nullable: true }
+        catalog_model_id: { type: string, format: uuid, nullable: true }
+        catalog_model_year_id: { type: string, format: uuid, nullable: true }
+
         current_mileage_km:
           type: integer
           format: int32
@@ -1352,6 +1531,121 @@ components:
           description: Data da leitura que produziu `current_mileage_km`.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    # ------------------------------------------------------------ catálogo de veículos
+    #
+    # O catálogo é uma cópia local de dados de terceiro, mantida no banco do Meu Auto e
+    # preenchida sob demanda. Nada aqui expõe o fornecedor: não há `external_id`, não há
+    # `provider`, não há `synced_at`. O app vê os ids do Meu Auto e o vocabulário do Meu
+    # Auto — o que torna a troca de fornecedor uma decisão de backend, e não uma quebra de
+    # contrato.
+
+    VehicleBrand:
+      type: object
+      required: [id, vehicle_type, name]
+      properties:
+        id: { type: string, format: uuid }
+        vehicle_type: { $ref: "#/components/schemas/VehicleType" }
+        name: { type: string, description: "Como a fonte escreve — ex.: `VW - VolksWagen`." }
+
+    VehicleModel:
+      type: object
+      required: [id, brand_id, name]
+      properties:
+        id: { type: string, format: uuid }
+        brand_id: { type: string, format: uuid }
+        name:
+          type: string
+          description: |
+            Modelo **e** versão num campo só — `PRIUS 1.8 16V 5p Aut. (Híbrido)`. A fonte
+            não separa os dois.
+
+    VehicleModelYear:
+      type: object
+      required: [id, model_id, name]
+      properties:
+        id: { type: string, format: uuid }
+        model_id: { type: string, format: uuid }
+        name: { type: string, description: "Ex.: `2017 Híbrido`." }
+        year:
+          type: integer
+          format: int32
+          nullable: true
+          description: |
+            `null` na entrada de veículo zero-quilômetro, que na fonte é uma faixa de preço
+            e não um ano.
+        fuel_label:
+          type: string
+          nullable: true
+          description: A palavra da fonte, para exibir — `Híbrido`, `Diesel`, `Gasolina`.
+        fuel_type:
+          # Um `string` anulável em vez de $ref FuelType, pelo mesmo motivo que
+          # `Vehicle.fuel_type` faz assim: em OpenAPI 3.0 um $ref não pode ser anulável, e
+          # este campo é. Os valores possíveis são exatamente os de FuelType.
+          type: string
+          nullable: true
+          enum: [flex, gasolina, etanol, diesel, gnv, eletrico, hibrido]
+          description: |
+            O **mesmo** combustível no vocabulário que `POST /v1/vehicles` aceita. Repasse
+            direto: o app não precisa de tabela de tradução nenhuma.
+
+            `null` quando a fonte usou uma palavra sem equivalente — aí o dono escolhe o
+            combustível à mão, como já fazia.
+
+    FipePrice:
+      type: object
+      required: [price_cents, reference_month, collected_at]
+      properties:
+        price_cents:
+          type: integer
+          format: int64
+          description: Centavos, inteiro, como todo valor nesta API.
+        reference_month:
+          type: string
+          format: date
+          description: |
+            Primeiro dia do mês a que a avaliação se refere. É um mês, não um dia — o dia 1
+            é só o que o torna uma data que ordena e subtrai.
+        collected_at:
+          type: string
+          format: date-time
+          description: |
+            Quando o Meu Auto coletou este valor, que não é o mesmo que o mês de referência.
+            Está no contrato porque a avaliação **pode ser antiga**: com a fonte fora do ar,
+            o último valor conhecido é servido em vez de nenhum.
+
+    VehicleModelYearDetail:
+      type: object
+      required: [id, model_id, name, brand, model]
+      properties:
+        id: { type: string, format: uuid }
+        model_id: { type: string, format: uuid }
+        name: { type: string }
+        year: { type: integer, format: int32, nullable: true }
+        fuel_label: { type: string, nullable: true }
+        fuel_type:
+          type: string
+          nullable: true
+          enum: [flex, gasolina, etanol, diesel, gnv, eletrico, hibrido]
+        fipe_code:
+          type: string
+          nullable: true
+          description: |
+            Código FIPE do veículo. `null` enquanto nenhuma avaliação tiver sido obtida — a
+            fonte só o revela nesta rota, nunca nas listas.
+        brand: { $ref: "#/components/schemas/VehicleBrand" }
+        model: { $ref: "#/components/schemas/VehicleModel" }
+        fipe_price:
+          # type + allOf, not a bare nullable $ref: in OpenAPI 3.0 `nullable` needs a
+          # sibling `type`, and the generator the app uses reads it the same way.
+          type: object
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/FipePrice"
+          description: |
+            **`null` não é erro.** Quando a fonte externa não responde e nada foi guardado
+            antes, o resto do objeto vem do banco e o cadastro segue normalmente. Uma
+            avaliação vale ser mostrada; nunca vale travar um formulário.
 
     CreateOdometerReadingRequest:
       type: object

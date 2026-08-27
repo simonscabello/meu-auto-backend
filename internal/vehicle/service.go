@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +25,23 @@ type PlanInitializer interface {
 	InitializeVehiclePlans(ctx context.Context, vehicleID uuid.UUID, vehicleType string) error
 }
 
+// CatalogPort is what this module needs from the vehicle catalogue.
+//
+// Declared here and satisfied by internal/catalog, so the dependency arrow points at an
+// abstraction this package owns rather than at another module. Primitive arguments and
+// returns, no shared struct: a struct would have to live in one package or the other, and
+// either direction creates an import this architecture does not want.
+//
+// It exists for one reason: an id the app sends must not become a foreign key without
+// somebody confirming it is real. The three ids it resolves are stored together, so a
+// vehicle is never linked to a model that belongs to a different brand.
+type CatalogPort interface {
+	// ResolveModelYear confirms a catalogue selection exists and reports the brand and
+	// model above it. A selection that does not exist comes back as an apperr not-found,
+	// ready to be returned as it is.
+	ResolveModelYear(ctx context.Context, modelYearID uuid.UUID) (brandID, modelID uuid.UUID, err error)
+}
+
 // Service holds the vehicle and odometer rules. It is the only layer here that builds
 // apperr values, so every client-visible message for this module sits in one place.
 type Service struct {
@@ -32,7 +50,13 @@ type Service struct {
 	// planInitializer is optional: nil means vehicles are created without suggested
 	// plans, which is a degraded but working state rather than a failure.
 	planInitializer PlanInitializer
-	log             *slog.Logger
+
+	// catalog resolves a catalogue selection to the ids a vehicle links to. Required, not
+	// optional: unlike the plans above, skipping it would mean writing an unverified
+	// foreign key.
+	catalog CatalogPort
+
+	log *slog.Logger
 
 	// location is America/Sao_Paulo. It matters for exactly one thing: deciding what
 	// "today" is when the client omits a date, and whether a supplied date is in the
@@ -43,8 +67,8 @@ type Service struct {
 	now func() time.Time
 }
 
-func NewService(repo *Repository, location *time.Location, log *slog.Logger) *Service {
-	return &Service{repo: repo, location: location, log: log, now: time.Now}
+func NewService(repo *Repository, catalog CatalogPort, location *time.Location, log *slog.Logger) *Service {
+	return &Service{repo: repo, catalog: catalog, location: location, log: log, now: time.Now}
 }
 
 // today is the current civil date in São Paulo, normalised to UTC midnight so it round
@@ -76,6 +100,14 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req createVehicl
 		id = parsed
 	}
 
+	// Resolved before the write, never after: an unverified selection must not reach the
+	// table even for the length of a transaction.
+	selection, err := s.resolveCatalogSelection(ctx, req.CatalogModelYearID,
+		"Não foi possível cadastrar o veículo.")
+	if err != nil {
+		return db.Vehicle{}, false, err
+	}
+
 	vehicle, created, err := s.repo.Create(ctx, db.CreateVehicleParams{
 		ID:              id,
 		VehicleType:     req.VehicleType,
@@ -90,6 +122,11 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req createVehicl
 		FuelType:        req.FuelType,
 		Color:           req.Color,
 		Nickname:        req.Nickname,
+		FipeCode:        req.FipeCode,
+
+		CatalogBrandID:     selection.brandID,
+		CatalogModelID:     selection.modelID,
+		CatalogModelYearID: selection.modelYearID,
 	}, userID, req.CurrentMileageKm, today)
 
 	switch {
@@ -118,6 +155,58 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, req createVehicl
 	return vehicle, created, nil
 }
 
+// catalogSelection is the three ids a vehicle links to, all nil when the owner did not
+// pick from the catalogue.
+//
+// A struct rather than three returns because they are one decision — a vehicle is either
+// linked to a catalogue entry at all three levels or to none of them, and three loose
+// pointers is three chances to write two of them.
+type catalogSelection struct {
+	brandID     *uuid.UUID
+	modelID     *uuid.UUID
+	modelYearID *uuid.UUID
+}
+
+// resolveCatalogSelection turns the one id the client sends into the three the vehicle
+// stores.
+//
+// The client never sends the brand or the model id, and that is the security property: a
+// selection cannot be assembled from parts, so there is no way to file a Prius under
+// Ferrari or to point a vehicle at a model that belongs to a different brand. The
+// catalogue derives both from the leaf.
+//
+// A selection that does not exist is a 404 from the catalogue, returned unchanged: the
+// message is already about the catalogue, which is the thing the caller got wrong.
+func (s *Service) resolveCatalogSelection(ctx context.Context, rawID *string, failureMessage string) (catalogSelection, error) {
+	if rawID == nil || strings.TrimSpace(*rawID) == "" {
+		return catalogSelection{}, nil
+	}
+
+	modelYearID, err := uuid.Parse(strings.TrimSpace(*rawID))
+	if err != nil {
+		return catalogSelection{}, apperr.Validation(failureMessage,
+			map[string]any{"catalog_model_year_id": "Identificador inválido."})
+	}
+
+	// Reaching this with no catalogue wired is a wiring bug, and it must fail closed
+	// rather than write an id nobody checked.
+	if s.catalog == nil {
+		return catalogSelection{}, apperr.Internal(
+			errors.New("vehicle: catalog port is not wired"))
+	}
+
+	brandID, modelID, err := s.catalog.ResolveModelYear(ctx, modelYearID)
+	if err != nil {
+		return catalogSelection{}, err
+	}
+
+	return catalogSelection{
+		brandID:     &brandID,
+		modelID:     &modelID,
+		modelYearID: &modelYearID,
+	}, nil
+}
+
 func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]db.Vehicle, error) {
 	vehicles, err := s.repo.ListForUser(ctx, userID)
 	if err != nil {
@@ -138,6 +227,12 @@ func (s *Service) Update(ctx context.Context, userID, vehicleID uuid.UUID, req u
 		return db.Vehicle{}, err
 	}
 
+	selection, err := s.resolveCatalogSelection(ctx, req.CatalogModelYearID,
+		"Não foi possível atualizar o veículo.")
+	if err != nil {
+		return db.Vehicle{}, err
+	}
+
 	updated, err := s.repo.Update(ctx, db.UpdateVehicleParams{
 		ID:              vehicleID,
 		Brand:           req.Brand,
@@ -151,6 +246,11 @@ func (s *Service) Update(ctx context.Context, userID, vehicleID uuid.UUID, req u
 		FuelType:        req.FuelType,
 		Color:           req.Color,
 		Nickname:        req.Nickname,
+		FipeCode:        req.FipeCode,
+
+		CatalogBrandID:     selection.brandID,
+		CatalogModelID:     selection.modelID,
+		CatalogModelYearID: selection.modelYearID,
 	})
 	switch {
 	case errors.Is(err, ErrVehicleNotFound):

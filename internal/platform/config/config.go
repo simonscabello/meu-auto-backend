@@ -44,6 +44,18 @@ type Config struct {
 	// TrustProxy makes rate limiting read X-Forwarded-For. Set it only when a proxy is
 	// actually in front (Railway, Caddy, nginx) — see httpx.ClientIP.
 	TrustProxy bool
+
+	// The FIPE provider behind the vehicle catalogue.
+	//
+	// The URL has a working default, so nothing has to be set for the catalogue to
+	// function; the variable exists so the integration suite can point it at a test server
+	// and so a self-hosted mirror is a config change rather than a deploy.
+	//
+	// The token is optional — without it the provider allows 500 requests a day, with a
+	// free one 1000. It NEVER leaves this process: it travels to the provider as a header,
+	// is never rendered into a URL, never logged, and never appears in any response.
+	FipeAPIURL   string
+	FipeAPIToken string
 }
 
 // TimeZone is the zone every civil-date decision is made in. The product is
@@ -76,6 +88,13 @@ func Load() (Config, error) {
 		MailFrom:         os.Getenv("MAIL_FROM"),
 		PasswordResetURL: envOr("PASSWORD_RESET_URL", "meuauto://redefinir-senha"),
 		TrustProxy:       strings.EqualFold(envOr("TRUST_PROXY", "false"), "true"),
+
+		// No default spelled out here, on purpose: the provider's public URL is the
+		// catalogue's business, and repeating it in this package would put one constant in
+		// two files that must never disagree. Empty means "whatever the client considers
+		// its default" — see fipe.New.
+		FipeAPIURL:   strings.TrimSpace(os.Getenv("FIPE_API_URL")),
+		FipeAPIToken: strings.TrimSpace(os.Getenv("FIPE_API_TOKEN")),
 	}
 
 	switch cfg.AppEnv {

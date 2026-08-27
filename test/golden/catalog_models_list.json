@@ -1,0 +1,12 @@
+{
+  "body": {
+    "data": [
+      {
+        "brand_id": "string",
+        "id": "string",
+        "name": "string"
+      }
+    ]
+  },
+  "status": 200
+}

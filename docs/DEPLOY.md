@@ -47,6 +47,16 @@ No serviço da API, aba **Variables**:
 | `TRUST_PROXY` | `true` | O Railway é um proxy. Sem isso, **todos os usuários do mundo compartilham um IP** no rate limit |
 | `LOG_LEVEL` | `info` | |
 | `PASSWORD_RESET_URL` | `meuauto://redefinir-senha` | Deep link do app. Ajuste quando o esquema do app for definido |
+| `FIPE_API_TOKEN` | *token da fipe.online* | **Opcional, mas defina.** Sem ele o catálogo de veículos tem 500 requisições/dia; com um token gratuito, 1000. É um **segredo**: viaja como header `X-Subscription-Token`, nunca na URL, nunca no log, nunca numa resposta |
+
+**Não defina `FIPE_API_URL`.** O padrão é a API pública v2 da Parallelum. A variável existe
+para apontar para um espelho próprio ou para um servidor de teste — não para produção.
+
+> A cota é **compartilhada por todos os usuários**, e é por isso que o catálogo é espelhado
+> no Postgres em vez de consultado a cada toque (SPEC.md D-16). Na prática cada ramo do
+> catálogo custa uma requisição externa **uma vez**, para sempre. Se ainda assim a cota
+> apertar, o sinal é `upstream_unavailable` no log com `status: 429` — a resposta é comprar
+> um plano, não mexer no código.
 
 **Não defina `PORT`** — o Railway injeta.
 
@@ -89,6 +99,19 @@ curl -s -X POST $BASE/v1/auth/register -H 'Content-Type: application/json' -d '{
 ```
 
 Deve responder `201` com um `access_token`. Apague essa conta depois com `DELETE /v1/me`.
+
+E o catálogo de veículos, que é o único ponto onde a API depende de terceiro:
+
+```bash
+curl -s -H "Authorization: Bearer $ACCESS_TOKEN" $BASE/v1/vehicle-brands
+```
+
+Cerca de 107 marcas. A primeira chamada é a única que sai para a Parallelum — no log ela
+aparece como `catalog cache miss` seguida de `fipe request completed`. Repita: a segunda
+não deve produzir linha nenhuma do fornecedor, e responde em milissegundos.
+
+Um `503` com `upstream_unavailable` aqui significa que a fonte externa não respondeu; o
+resto da API continua funcionando, e cadastrar veículo digitando à mão também.
 
 ## 5. Rollback
 

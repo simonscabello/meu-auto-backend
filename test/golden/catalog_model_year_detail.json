@@ -1,0 +1,27 @@
+{
+  "body": {
+    "brand": {
+      "id": "string",
+      "name": "string",
+      "vehicle_type": "string"
+    },
+    "fipe_code": "string",
+    "fipe_price": {
+      "collected_at": "string",
+      "price_cents": "number",
+      "reference_month": "string"
+    },
+    "fuel_label": "string",
+    "fuel_type": "string",
+    "id": "string",
+    "model": {
+      "brand_id": "string",
+      "id": "string",
+      "name": "string"
+    },
+    "model_id": "string",
+    "name": "string",
+    "year": "number"
+  },
+  "status": 200
+}

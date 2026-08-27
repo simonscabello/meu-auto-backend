@@ -15,6 +15,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/simonscabello/meu-auto-backend/internal/catalog"
+	"github.com/simonscabello/meu-auto-backend/internal/catalog/fipe"
 	"github.com/simonscabello/meu-auto-backend/internal/identity"
 	"github.com/simonscabello/meu-auto-backend/internal/insight"
 	"github.com/simonscabello/meu-auto-backend/internal/maintenance"
@@ -44,9 +46,22 @@ type Deps struct {
 func New(cfg config.Config, deps Deps) http.Handler {
 	tokens := auth.NewTokenService([]byte(cfg.JWTSecret), config.JWTIssuer)
 
-	// Vehicle is built first because identity takes it as a UserDataEraser: vehicles carry
+	// The vehicle catalogue is a leaf: it depends on the database and on its provider, and
+	// on no other module. It is built first because vehicle takes it as a CatalogPort.
+	catalogService := catalog.NewService(
+		catalog.NewRepository(deps.Pool),
+		fipe.New(cfg.FipeAPIURL, cfg.FipeAPIToken, deps.Log),
+		deps.Log)
+	catalogHandler := catalog.NewHandler(catalogService, tokens)
+
+	// Vehicle is built next because identity takes it as a UserDataEraser: vehicles carry
 	// no user_id, so deleting an account cannot cascade to them.
-	vehicleService := vehicle.NewService(vehicle.NewRepository(deps.Pool), deps.Location, deps.Log)
+	//
+	// catalogService satisfies vehicle.CatalogPort structurally — the interface is declared
+	// in vehicle and its signature is primitives only, so neither package imports the
+	// other and the wiring is the only place that knows they meet.
+	vehicleService := vehicle.NewService(
+		vehicle.NewRepository(deps.Pool), catalogService, deps.Location, deps.Log)
 	vehicleHandler := vehicle.NewHandler(vehicleService, tokens)
 
 	// Maintenance depends on vehicle for authorisation, and vehicle depends on
@@ -76,6 +91,6 @@ func New(cfg config.Config, deps Deps) http.Handler {
 		cfg.TrustProxy,
 	)
 
-	return newRouter(cfg, deps.Pool, identityHandler, vehicleHandler,
+	return newRouter(cfg, deps.Pool, identityHandler, vehicleHandler, catalogHandler,
 		maintenanceHandler, obligationHandler, insightHandler)
 }

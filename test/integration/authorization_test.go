@@ -77,6 +77,11 @@ func newOwnedResources(u *user) *ownedResources {
 	}
 }
 
+// placeholderCatalogID stands in for a catalogue id in the routes below. Nothing in this
+// file ever reaches a handler with it: the anonymous matrix is refused by the middleware,
+// and the isolation tests only walk hiddenFromStrangers routes.
+const placeholderCatalogID = "00000000-0000-0000-0000-000000000000"
+
 func protectedRoutes() []protectedRoute {
 	// Bodies that satisfy validation without depending on any state of their own. A PATCH
 	// with {} is valid everywhere here: an absent field means "leave unchanged".
@@ -116,6 +121,32 @@ func protectedRoutes() []protectedRoute {
 		{http.MethodDelete, "/v1/odometer/{readingID}",
 			func(f *ownedResources) string { return "/v1/odometer/" + f.readingID },
 			nil, hiddenFromStrangers},
+
+		// ---------- vehicle catalogue ----------
+		//
+		// callerScoped, and the reason is worth stating: the catalogue is reference data
+		// every account may read — brands and models are public facts, and there is no
+		// other user's resource to hide behind them.
+		//
+		// What these routes DO gate is cost. A request that misses the mirror spends part
+		// of a daily quota shared by every user, so they sit behind the token even though
+		// the data is not secret. The ids below are fixed placeholders: the anonymous
+		// matrix is refused before any handler runs, and the two isolation tests skip
+		// callerScoped routes entirely.
+		{http.MethodGet, "/v1/vehicle-brands",
+			func(*ownedResources) string { return "/v1/vehicle-brands" }, nil, callerScoped},
+		{http.MethodGet, "/v1/vehicle-brands/{brandID}/models",
+			func(*ownedResources) string {
+				return "/v1/vehicle-brands/" + placeholderCatalogID + "/models"
+			}, nil, callerScoped},
+		{http.MethodGet, "/v1/vehicle-models/{modelID}/years",
+			func(*ownedResources) string {
+				return "/v1/vehicle-models/" + placeholderCatalogID + "/years"
+			}, nil, callerScoped},
+		{http.MethodGet, "/v1/vehicle-model-years/{modelYearID}",
+			func(*ownedResources) string {
+				return "/v1/vehicle-model-years/" + placeholderCatalogID
+			}, nil, callerScoped},
 
 		// ---------- maintenance ----------
 		{http.MethodGet, "/v1/maintenance-items",

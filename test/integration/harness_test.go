@@ -43,6 +43,29 @@ func TestMain(m *testing.M) {
 // characters, and a random one per run would make a failing token impossible to inspect.
 const testJWTSecret = "integration-test-secret-not-a-real-one"
 
+// unreachableFipeURL is where the vehicle catalogue points unless a test says otherwise.
+//
+// NOT the real provider, and this is deliberate rather than tidy. Port 1 on the loopback
+// refuses instantly, so a test that reaches the catalogue without meaning to fails fast
+// and locally instead of spending one of five hundred daily requests from somebody's
+// network — every run, on every machine, in CI.
+//
+// A test that wants the catalogue to work passes withFipeServer.
+const unreachableFipeURL = "http://127.0.0.1:1"
+
+// envOption tunes one test's world. Variadic on newEnv so the sixty existing calls keep
+// meaning exactly what they meant.
+type envOption func(*config.Config)
+
+// withFipeServer points the vehicle catalogue at a stand-in for the FIPE provider.
+//
+// The REAL client runs against it — this substitutes the server, not the code. Status
+// mapping, path building, header handling and JSON decoding are all exercised, which a
+// hand-written fake client would have quietly skipped.
+func withFipeServer(baseURL string) envOption {
+	return func(cfg *config.Config) { cfg.FipeAPIURL = baseURL }
+}
+
 var emailCounter atomic.Uint64
 
 // env is one test's world: its own database, its own router, its own rate limiters.
@@ -62,7 +85,7 @@ type env struct {
 //
 // It calls app.New — the same function cmd/api serves — so a module added to the wiring
 // is covered here without anyone remembering to update a fixture.
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T, opts ...envOption) *env {
 	t.Helper()
 
 	db := testdb.New(t)
@@ -83,6 +106,10 @@ func newEnv(t *testing.T) *env {
 		CORSOrigins:      []string{"*"},
 		PasswordResetURL: "meuauto://redefinir-senha",
 		TrustProxy:       false,
+		FipeAPIURL:       unreachableFipeURL,
+	}
+	for _, opt := range opts {
+		opt(&cfg)
 	}
 
 	return &env{

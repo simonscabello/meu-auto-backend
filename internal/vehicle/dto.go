@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/simonscabello/meu-auto-backend/internal/platform/civil"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/validate"
 	"github.com/simonscabello/meu-auto-backend/internal/vehicle/db"
@@ -75,9 +77,39 @@ type createVehicleRequest struct {
 	Color           *string `json:"color"`
 	Nickname        *string `json:"nickname"`
 
+	// The catalogue entry the owner picked, from GET /v1/vehicle-model-years/{id}.
+	//
+	// Optional, and it will stay optional. A vehicle typed in by hand is a first-class
+	// vehicle — the catalogue may not have the car, the provider may be down, and the app
+	// already installed does not know this field exists.
+	//
+	// It is the ONLY id sent: the brand and the model are derived from it server-side, so
+	// there is no way to submit a model that belongs to a different brand.
+	CatalogModelYearID *string `json:"catalog_model_year_id"`
+
+	// Snapshot of the FIPE code as it was when the vehicle was registered.
+	//
+	// Sent by the client rather than read from the catalogue, and that is the point: every
+	// text field here records what the owner saw and confirmed. See the note below on why
+	// the snapshot is not a lookup.
+	FipeCode *string `json:"fipe_code"`
+
 	// Opening odometer. Stored as a reading, not written to the cache.
 	CurrentMileageKm *int32 `json:"current_mileage_km"`
 }
+
+// A NOTE ON THE SNAPSHOT, because it looks like duplication and is not.
+//
+// brand, model, version, model_year, fuel_type and fipe_code are stored on the vehicle as
+// text even when catalog_model_year_id is present. They are not a cache of the catalogue
+// row — they are a record of what the owner confirmed on the screen.
+//
+// The provider rewrites its own descriptions. "PRIUS 1.8 16V 5p Aut. (Híbrido)" may be
+// "Prius 1.8 Hybrid Automatic" next year. A service history that silently rewrites itself
+// when a supplier tidies a string is worth less at resale than one that does not, and this
+// history is the product's asset. The link answers "which catalogue entry is this?"; the
+// snapshot answers "what did they register?", and only the second one has to hold up in
+// front of a buyer.
 
 func (r *createVehicleRequest) normalizeAndValidate(today time.Time) error {
 	errs := validate.New()
@@ -111,6 +143,12 @@ func (r *createVehicleRequest) normalizeAndValidate(today time.Time) error {
 	r.FuelType = trimLowerOptional(r.FuelType)
 	validateFuelType(errs, r.FuelType)
 
+	// Length only, no format check. The code is a label this API handed the app in the
+	// first place, and pinning "006 digits, dash, one digit" here would reject the day the
+	// source changes its own format — for a field nothing computes with.
+	r.FipeCode = trimOptional(r.FipeCode)
+	optionalTextLength(errs, "fipe_code", r.FipeCode)
+
 	if r.CurrentMileageKm != nil {
 		validateMileage(errs, "current_mileage_km", *r.CurrentMileageKm)
 	}
@@ -135,6 +173,14 @@ type updateVehicleRequest struct {
 	FuelType        *string `json:"fuel_type"`
 	Color           *string `json:"color"`
 	Nickname        *string `json:"nickname"`
+
+	// Re-picking the catalogue entry — "I chose the wrong version". Sending it relinks all
+	// three levels; omitting it leaves the existing link alone, like every other field
+	// here. There is no way to clear the link back to null, for the same reason no other
+	// optional can be cleared: `null` is indistinguishable from absent once decoded.
+	CatalogModelYearID *string `json:"catalog_model_year_id"`
+
+	FipeCode *string `json:"fipe_code"`
 }
 
 func (r *updateVehicleRequest) normalizeAndValidate(today time.Time) error {
@@ -167,6 +213,8 @@ func (r *updateVehicleRequest) normalizeAndValidate(today time.Time) error {
 	validateChassis(errs, r.Chassis)
 	r.FuelType = trimLowerOptional(r.FuelType)
 	validateFuelType(errs, r.FuelType)
+	r.FipeCode = trimOptional(r.FipeCode)
+	optionalTextLength(errs, "fipe_code", r.FipeCode)
 
 	return errs.Err("Não foi possível atualizar o veículo.")
 }
@@ -356,6 +404,13 @@ type vehicleResponse struct {
 	Nickname        *string `json:"nickname"`
 	FipeCode        *string `json:"fipe_code"`
 
+	// The catalogue entry this vehicle was registered from, or null when it was typed in
+	// by hand. The app uses them to pre-select the pickers on an edit screen; nothing in
+	// the domain requires them to be present.
+	CatalogBrandID     *string `json:"catalog_brand_id"`
+	CatalogModelID     *string `json:"catalog_model_id"`
+	CatalogModelYearID *string `json:"catalog_model_year_id"`
+
 	CurrentMileageKm int32   `json:"current_mileage_km"`
 	CurrentMileageAt *string `json:"current_mileage_at"`
 
@@ -363,22 +418,37 @@ type vehicleResponse struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// uuidPtrString renders an optional id, keeping nil as nil so an absent link reaches the
+// client as JSON null rather than the zero uuid — which would look like a real id.
+func uuidPtrString(id *uuid.UUID) *string {
+	if id == nil {
+		return nil
+	}
+	rendered := id.String()
+	return &rendered
+}
+
 func toVehicleResponse(v db.Vehicle) vehicleResponse {
 	return vehicleResponse{
-		ID:               v.ID.String(),
-		VehicleType:      v.VehicleType,
-		Brand:            v.Brand,
-		Model:            v.Model,
-		Version:          v.Version,
-		ManufactureYear:  v.ManufactureYear,
-		ModelYear:        v.ModelYear,
-		Plate:            v.Plate,
-		Renavam:          v.Renavam,
-		Chassis:          v.Chassis,
-		FuelType:         v.FuelType,
-		Color:            v.Color,
-		Nickname:         v.Nickname,
-		FipeCode:         v.FipeCode,
+		ID:              v.ID.String(),
+		VehicleType:     v.VehicleType,
+		Brand:           v.Brand,
+		Model:           v.Model,
+		Version:         v.Version,
+		ManufactureYear: v.ManufactureYear,
+		ModelYear:       v.ModelYear,
+		Plate:           v.Plate,
+		Renavam:         v.Renavam,
+		Chassis:         v.Chassis,
+		FuelType:        v.FuelType,
+		Color:           v.Color,
+		Nickname:        v.Nickname,
+		FipeCode:        v.FipeCode,
+
+		CatalogBrandID:     uuidPtrString(v.CatalogBrandID),
+		CatalogModelID:     uuidPtrString(v.CatalogModelID),
+		CatalogModelYearID: uuidPtrString(v.CatalogModelYearID),
+
 		CurrentMileageKm: v.CurrentMileageKm,
 		CurrentMileageAt: civil.FormatPtr(v.CurrentMileageAt),
 		CreatedAt:        v.CreatedAt,

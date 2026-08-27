@@ -4,9 +4,12 @@
 INSERT INTO vehicles (
     id, vehicle_type, brand, model, version,
     manufacture_year, model_year, plate, renavam, chassis,
-    fuel_type, color, nickname
+    fuel_type, color, nickname, fipe_code,
+    -- The link to the catalogue entry the owner picked. Always nullable: a vehicle typed
+    -- in by hand is still a vehicle, and the app already installed never sends these.
+    catalog_brand_id, catalog_model_id, catalog_model_year_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 ON CONFLICT (id) DO NOTHING
 RETURNING *;
 
@@ -51,6 +54,16 @@ SET brand            = COALESCE(sqlc.narg('brand'), brand),
     fuel_type        = COALESCE(sqlc.narg('fuel_type'), fuel_type),
     color            = COALESCE(sqlc.narg('color'), color),
     nickname         = COALESCE(sqlc.narg('nickname'), nickname),
+    fipe_code        = COALESCE(sqlc.narg('fipe_code'), fipe_code),
+
+    -- The three move together or not at all. They are resolved from a single
+    -- catalog_model_year_id, so a partial update could not produce a brand that disagrees
+    -- with its model — but writing them as one group is what keeps that true if somebody
+    -- later adds a second way in.
+    catalog_brand_id      = COALESCE(sqlc.narg('catalog_brand_id'), catalog_brand_id),
+    catalog_model_id      = COALESCE(sqlc.narg('catalog_model_id'), catalog_model_id),
+    catalog_model_year_id = COALESCE(sqlc.narg('catalog_model_year_id'), catalog_model_year_id),
+
     updated_at       = now()
 WHERE id = sqlc.arg('id') AND deleted_at IS NULL
 RETURNING *;

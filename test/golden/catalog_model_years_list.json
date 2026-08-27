@@ -1,0 +1,15 @@
+{
+  "body": {
+    "data": [
+      {
+        "fuel_label": "string",
+        "fuel_type": "string",
+        "id": "string",
+        "model_id": "string",
+        "name": "string",
+        "year": "null|number"
+      }
+    ]
+  },
+  "status": 200
+}

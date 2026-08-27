@@ -72,8 +72,24 @@ docker compose up -d                 # Postgres only, nothing else
 set -a && . ./.env && set +a && go run ./cmd/api
 
 go vet ./... && go test ./...        # full suite, seconds
-gofmt -l .                           # must print nothing
+gofmt -l .                           # see the CRLF note below before believing it
 ```
+
+- **`gofmt -l .` lies on this machine, and it is not your change.** `core.autocrlf=true`, so
+  some files sit in the working tree with CRLF and gofmt wants to rewrite every line of
+  them. Git stores LF and CI checks out LF, where the whole tree is clean. To check what CI
+  will actually see:
+
+  ```bash
+  rm -rf /tmp/lfcheck && mkdir -p /tmp/lfcheck
+  { git ls-files '*.go'; git ls-files --others --exclude-standard '*.go'; } | while read -r f; do
+    mkdir -p "/tmp/lfcheck/$(dirname "$f")"; tr -d '\r' < "$f" > "/tmp/lfcheck/$f"
+  done
+  (cd /tmp/lfcheck && gofmt -l .)     # THIS must print nothing
+  ```
+
+  Do not "fix" the flagged files by running `gofmt -w` on them: it rewrites their line
+  endings, which turns a no-op into a whole-file diff.
 
 - **`go test -race` does not work here** — no gcc on this machine, and the race detector
   needs cgo. CI runs it on Linux (`make test-race`). Locally, `go test ./...` is the check.
@@ -130,6 +146,7 @@ gofmt -l .                           # must print nothing
 
 - **obligation** — `GET|POST /v1/vehicles/{id}/obligations`, `PATCH|DELETE /v1/obligations/{id}`, `GET|POST /v1/vehicles/{id}/seguros`, `PATCH|DELETE /v1/seguros/{id}`. IPVA and licenciamento share a table with an explicit `kind`; a seguro has its own, because it is a contract with a period rather than a dated debt.
 - **insight** — `GET /v1/vehicles/{id}/{dashboard,alerts,timeline}`. The read model.
+- **catalog** — `GET /v1/vehicle-brands`, `GET /v1/vehicle-brands/{id}/models`, `GET /v1/vehicle-models/{id}/years`, `GET /v1/vehicle-model-years/{id}`. The vehicle catalogue, mirrored from the FIPE table so registration is three dropdowns instead of three free-text fields. **The only module that talks to a third party.**
 
 **`internal/maintenance/due.go` is the most important file in this repo.** It is pure — no database, no clock, no context — and it holds the rule the whole product exists to serve. Change it only with its test suite in front of you, and keep it that way: the same function serves an HTTP request today and a notification cron later, and the two must never disagree.
 
@@ -145,6 +162,18 @@ Deploy is prepared but **not yet done** — `Dockerfile`, `.dockerignore`, `rail
   - `TestGoldenResponses` snapshots the *shape* of every response into `test/golden` — every key and the type of every leaf, not the values, which is what makes the files stable across runs. A renamed or vanished field fails; regenerate with `make test-golden` and read the diff, because a change there is a change to what an already-installed app receives.
 
 Under those sit the invariants: the odometer trigger and RN-01, aggregate atomicity, RN-09 materialisation, keyset pagination, refresh rotation and reuse detection, the password reset, and the LGPD erasure.
+
+**The vehicle catalogue is the only thing here that depends on somebody else's server**, and everything about `internal/catalog` follows from one number: the provider's free tier is **500 requests a day**, shared by every user. So:
+
+- **Postgres is asked first, always.** A miss fetches from the provider, persists, and returns; the next request for that branch — for anyone, forever — costs nothing. Nothing is imported ahead of time. In practice a full brand→model→year→detail walk costs exactly four external requests, once, and 5 ms per request after that.
+- **`internal/catalog/fipe` is the only package that knows the provider exists.** It has its own vocabulary (`cars`, not `car`), its own DTOs, and its own error sentinels. Nothing above it sees a status code or a JSON field of theirs, and `external_id`/`provider`/`synced_at` never reach the wire — otherwise the app starts depending on them and changing supplier stops being a backend decision.
+- **It does not retry, deliberately.** A retry doubles the cost of exactly the failures where it helps least: a quota retried is a quota hit twice. See the comment on `Client.get` before adding one.
+- **A provider outage must never block a registration.** `GET /v1/vehicle-model-years/{id}` returns 200 with `fipe_price: null` when the valuation cannot be fetched — the catalogue half comes from our own tables. Only a request with genuinely nothing to serve returns `upstream_unavailable` (503). A 429 from the provider is **not** `rate_limited`: that code tells the app *this user* is going too fast, and the quota that ran out is ours.
+- **Concurrency is a UNIQUE constraint and `ON CONFLICT`, nothing else.** Two users tapping the same brand at once both call the provider — one wasted request — and the second insert updates instead of duplicating. There is no lock, and there must not be: any lock here would have to be held across an HTTP call to a third party.
+- **`FIPE_API_TOKEN` is a secret.** Header only, never a URL, never a log, never a response. It is optional; without it the quota is 500/day instead of 1000.
+- **A vehicle keeps a snapshot, not a lookup.** `vehicles.brand/model/model_year/fuel_type/fipe_code` record what the owner confirmed; `catalog_brand_id/model_id/model_year_id` record which entry they picked. When the provider renames "PRIUS 1.8 16V 5p Aut. (Híbrido)", the vehicle does not change — a service history that rewrites itself is worth less at resale, and that history is the product's asset. All three ids are nullable and always will be: a hand-typed vehicle is a first-class vehicle.
+- **The app never sends a brand or model id.** It sends `catalog_model_year_id` alone and the server derives the other two, so an inconsistent triple is not expressible.
+- **No test reaches the real provider.** `newEnv` points the catalogue at `127.0.0.1:1`, which refuses instantly; a test that wants it working passes `withFipeServer(fake.URL)`. The fake serves payloads copied from the live API and counts requests — most assertions in `catalog_test.go` are about that count, not the body.
 
 **`internal/insight` is the only module allowed to depend on other modules.** The arrow is one-way and read-only: it calls the owning module's service and never re-derives a status. If you find yourself computing "overdue" inside insight, stop — the rule belongs to the module that owns the data, or the screen will drift from the domain behind it.
 
@@ -179,6 +208,7 @@ Some of the facts `PRODUCT.md` lists as open were **decided during the backend b
 - **Fines (multas):** not tracked in MVP-1; an `expenses` category in MVP-2.
 - **Fuel logging:** not in MVP-1 at all — first item of MVP-2.
 - **IPVA/licenciamento calendars:** entered by the owner. No official-data integration in the MVP.
+- **FIPE:** SPEC.md listed it as deferred until after MVP-2. **It has since been built** — `internal/catalog`, migration 000009 — because it removes four free-text fields from the registration form, which is the first screen every user sees. What is built is the *catalogue*; the *valuation history* is stored (`vehicle_fipe_prices` keyed by reference month) but nothing reads more than the latest row yet.
 - **Receipt and document images:** deferred out of MVP-1. Object storage is the only new infrastructure this project would need, and nothing depends on it yet — `docker-compose.yml` is Postgres and nothing else.
 
 Still genuinely open, and still not to be invented: notification delivery, monetization and account limits.

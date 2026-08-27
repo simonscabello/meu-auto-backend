@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/simonscabello/meu-auto-backend/internal/catalog"
 	"github.com/simonscabello/meu-auto-backend/internal/identity"
 	"github.com/simonscabello/meu-auto-backend/internal/insight"
 	"github.com/simonscabello/meu-auto-backend/internal/maintenance"
@@ -32,6 +33,7 @@ func newRouter(
 	pool *pgxpool.Pool,
 	identityHandler *identity.Handler,
 	vehicleHandler *vehicle.Handler,
+	catalogHandler *catalog.Handler,
 	maintenanceHandler *maintenance.Handler,
 	obligationHandler *obligation.Handler,
 	insightHandler *insight.Handler,
@@ -80,6 +82,7 @@ func newRouter(
 	r.Route("/v1", func(r chi.Router) {
 		identityHandler.Mount(r)
 		vehicleHandler.Mount(r)
+		catalogHandler.Mount(r)
 		maintenanceHandler.Mount(r)
 		obligationHandler.Mount(r)
 		insightHandler.Mount(r)

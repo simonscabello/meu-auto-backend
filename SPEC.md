@@ -294,6 +294,34 @@ o `CLAUDE.md` do app.
   (`manual` | `maintenance` | `abastecimento` | `correction`),
   `source_maintenance_id` (FK nullable, `ON DELETE CASCADE`), `recorded_by_user_id`.
 
+### Catálogo de veículos (D-16)
+
+Espelho local da tabela FIPE, preenchido sob demanda. Todas as tabelas são **descartáveis**:
+apagar tudo custa só as próximas requisições externas.
+
+- **`vehicle_brands`** — `provider` (`fipe_parallelum`), `vehicle_type`, `external_id`,
+  `name`, `synced_at`, `models_synced_at` (NULL = lista de modelos nunca buscada).
+  Único por `(provider, vehicle_type, external_id)`. O `provider` fica **só aqui**: modelo
+  e ano só são alcançáveis pela marca, então a FK já carrega a procedência.
+- **`vehicle_models`** — `brand_id`, `external_id`, `name` (modelo **e** versão num campo
+  só — a fonte não separa), `synced_at`, `years_synced_at`.
+  Único por `(brand_id, external_id)`.
+- **`vehicle_model_years`** — `model_id`, `external_id` (`"2017-6"`), `name`
+  (`"2017 Híbrido"`), `year` (NULL no pseudo-ano 32000 de zero-quilômetro), `fuel_label`
+  (palavra da fonte), `fuel_type` (**já no vocabulário de `vehicles.fuel_type`**),
+  `fipe_code`. Único por `(model_id, external_id)`.
+- **`vehicle_catalog_syncs`** — PK `(provider, vehicle_type)` + `synced_at`. Existe porque
+  a *lista de marcas* é a única coleção sem linha-pai onde pendurar o timestamp.
+- **`vehicle_fipe_prices`** — `model_year_id`, `fipe_code`, `price_cents`,
+  `reference_month` (date, dia 1), `collected_at`.
+  Único por `(model_year_id, reference_month)`. **Separado do catálogo de propósito:** marca,
+  modelo e ano são fatos; preço é uma medição com data. Uma coluna `price` no ano faria toda
+  leitura sobrescrever o histórico — e o histórico é a parte interessante.
+
+O `vehicles` ganha `catalog_brand_id`, `catalog_model_id`, `catalog_model_year_id`
+(nullable, `ON DELETE SET NULL`). Os campos de texto do veículo continuam sendo um
+**retrato** do que o dono confirmou, nunca um espelho do catálogo — ver D-16.
+
 ### Manutenção
 
 - **`maintenance_items`** — catálogo. `slug`, `name` (pt-BR), `kind`
@@ -516,7 +544,20 @@ POST   /v1/vehicles/{vehicleId}/odometer       # 422 odometer_rollback se retroc
 DELETE /v1/odometer/{readingId}
 ```
 
-### Catálogo e planos
+### Catálogo de veículos
+
+```
+GET    /v1/vehicle-brands?vehicle_type=car
+GET    /v1/vehicle-brands/{brandId}/models
+GET    /v1/vehicle-models/{modelId}/years
+GET    /v1/vehicle-model-years/{modelYearId}     # detalhe + valor FIPE
+```
+
+Selects progressivos: marca → modelo → ano → detalhe → `POST /v1/vehicles`.
+Autenticados, mas **caller-scoped**: são dados de referência que toda conta pode ler. O
+token está ali por causa do custo — cada miss gasta parte de uma cota diária compartilhada.
+
+### Catálogo de manutenção e planos
 
 ```
 GET    /v1/maintenance-items?vehicle_type=car&kind=maintenance
@@ -583,7 +624,8 @@ GET    /readyz                                 # ping no banco
 ```
 
 Códigos: `validation_failed`, `unauthorized`, `forbidden`, `not_found`,
-`method_not_allowed`, `conflict`, `odometer_rollback`, `rate_limited`, `internal`.
+`method_not_allowed`, `conflict`, `odometer_rollback`, `rate_limited`,
+`upstream_unavailable`, `internal`.
 **Códigos de erro são contrato — nunca renomear, nunca reaproveitar.**
 
 Isso vale inclusive para 404 de rota inexistente e 405 de método errado: os handlers
@@ -832,6 +874,56 @@ Coberto por `TestRefreshRotatesAndDetectsReuse` (o alarme dispara) e
 
 ---
 
+### D-16 — Catálogo FIPE espelhado no Postgres, preenchido sob demanda
+
+O cadastro de veículo pedia marca, modelo, versão, ano e combustível como **texto livre**.
+É a primeira tela que todo usuário vê, e digitar "Volkswagem" ali contamina tudo o que vem
+depois. O catálogo troca isso por selects progressivos.
+
+**O número que decide a arquitetura: a cota gratuita do fornecedor é 500 requisições por
+dia**, compartilhada por todos os usuários. Um proxy direto gastaria isso em algumas dezenas
+de cadastros. Então:
+
+```
+requisição → Postgres → achou?  → devolve
+                      → não     → fornecedor → persiste → devolve
+```
+
+Medido contra a API real: uma descida completa (marcas → modelos → anos → detalhe) custa
+**exatamente 4 requisições externas, uma vez**. Depois disso, 5 ms vindos do Postgres contra
+413 ms do fornecedor — e nenhuma chamada externa, para nenhum usuário, nunca mais.
+
+Nada é importado antecipadamente. São ~107 marcas e dezenas de milhares de anos-modelo;
+importar tudo seria um dia de requisições para preparar respostas que ninguém pediu.
+
+**Decisões que acompanham:**
+
+| Decisão | Por quê |
+|---|---|
+| `id` nosso, `external_id` deles | O domínio não fica preso ao id da Parallelum. Trocar de fornecedor vira uma sincronização, não um rewrite de todo veículo que referenciava |
+| `provider` só em `vehicle_brands` | Modelo e ano só são alcançáveis pela marca; repetir a coluna seria dado desnormalizado que nenhuma query usa |
+| Preço em tabela própria, por mês de referência | Marca/modelo/ano são fatos; preço é medição. Uma coluna `price` no ano faria toda leitura sobrescrever o histórico |
+| TTL **só** no preço (7 dias) | Um 2017 será 2017 para sempre; o preço é republicado mensalmente. Sem cron, sem worker: a expiração é verificada na leitura |
+| Sem retry | A cota é dura. Retry dobra o custo justamente das falhas onde menos ajuda — quota consumida vira quota batida duas vezes. Um 4xx nunca deve ser repetido |
+| Sem lock de nenhum tipo | UNIQUE + `ON CONFLICT` resolve a corrida. Um lock aqui teria de ser mantido através de uma chamada HTTP a terceiro, que é como fornecedor lento vira pool esgotado |
+| `upstream_unavailable` (503), não `rate_limited` | `rate_limited` diz "**você** está indo rápido demais". A cota estourada é nossa e compartilhada; culpar quem tocou na tela seria mentira que o app repete |
+| Detalhe degrada em vez de falhar | É a última tela antes do cadastro. Fornecedor fora do ar devolve `fipe_price: null` com o resto vindo do banco — travar um formulário por causa de um enfeite seria pior |
+| `fuel_type` traduzido no backend | A API devolve `fuel_label` ("Híbrido", para exibir) **e** `fuel_type` ("hibrido", que `POST /v1/vehicles` aceita). O app não fica com tabela de tradução de vocabulário de fornecedor |
+| Só `car` na fronteira HTTP | Schema, cliente e mapa de tipos já suportam moto e caminhão. O limite está no mesmo lugar que em `POST /v1/vehicles`: é escopo de produto. Ampliar é apagar uma guarda |
+
+**O veículo guarda um retrato, não uma consulta.** `brand`, `model`, `model_year`,
+`fuel_type` e `fipe_code` continuam sendo texto no `vehicles`, mesmo com o vínculo
+presente. Quando a fonte renomear `PRIUS 1.8 16V 5p Aut. (Híbrido)` para algo mais
+arrumado, o veículo **não muda**: um histórico de serviço que se reescreve sozinho porque
+um fornecedor arrumou uma string vale menos na revenda, e esse histórico é o ativo do
+produto. Os três ids respondem "de qual entrada do catálogo veio isto?"; o retrato responde
+"o que essa pessoa cadastrou?", e só o segundo precisa se sustentar diante de um comprador.
+
+**O app manda um id só.** `catalog_model_year_id`; a marca e o modelo são derivados no
+servidor. Um trio inconsistente não é expressável, e um id inventado não vira FK.
+
+---
+
 ## 9. Decisões adiadas
 
 Registradas com o **gatilho** que as reabre. Nenhuma deve ser implementada "por via das dúvidas".
@@ -858,7 +950,10 @@ Registradas com o **gatilho** que as reabre. Nenhuma deve ser implementada "por 
 | Parcelamento de IPVA | Se o uso mostrar que importa |
 | Amortização do prêmio de seguro no custo mensal | Quando o relatório de custo mensal existir |
 | Multas | Categoria de `expenses` no MVP-2; entidade própria só se houver integração |
-| FIPE | Depois do MVP-2. Traz valor de mercado e engajamento |
+| ~~FIPE~~ | **FEITO** — ver D-16. Antecipado porque remove quatro campos de texto livre da primeira tela do produto, não pelo valor de mercado |
+| **Histórico mensal de valor FIPE** | A tabela `vehicle_fipe_prices` já guarda por mês de referência e nada além da linha mais recente é lido. Reabre quando houver tela de desvalorização — aí é um `ORDER BY`, e um job mensal para adensar os meses que ninguém consultou |
+| **Atualizar o catálogo já sincronizado** | `synced_at`, `models_synced_at` e `years_synced_at` existem e nada os expira. Reabre quando um modelo novo demorar a aparecer: vira um `WHERE synced_at < X` na mesma leitura, sem cron |
+| **Moto e caminhão no catálogo** | Schema, cliente e mapa de tipos já suportam. A guarda está em `normalizeVehicleType`, junto com a de `POST /v1/vehicles` — as duas caem juntas |
 | SENATRAN / DETRAN | Não é pré-requisito de nada. Última fila |
 | Offline / sincronização | Fora de escopo por decisão de produto. Id do cliente já deixa a porta aberta |
 | Redis, filas, i18n | Sem gatilho previsto |
