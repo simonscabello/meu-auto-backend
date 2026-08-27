@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/simonscabello/meu-auto-backend/internal/abastecimento"
 	"github.com/simonscabello/meu-auto-backend/internal/insight/db"
 	"github.com/simonscabello/meu-auto-backend/internal/maintenance"
 	"github.com/simonscabello/meu-auto-backend/internal/obligation"
@@ -40,6 +41,10 @@ type (
 	ObligationPort interface {
 		ListUpcoming(ctx context.Context, userID, vehicleID uuid.UUID) ([]obligation.Upcoming, error)
 	}
+
+	AbastecimentoPort interface {
+		LastWithConsumption(ctx context.Context, userID, vehicleID uuid.UUID) (*abastecimento.LastFill, error)
+	}
 )
 
 const (
@@ -55,24 +60,26 @@ const (
 )
 
 type Service struct {
-	repo        *Repository
-	vehicle     VehiclePort
-	maintenance MaintenancePort
-	obligation  ObligationPort
+	repo          *Repository
+	vehicle       VehiclePort
+	maintenance   MaintenancePort
+	obligation    ObligationPort
+	abastecimento AbastecimentoPort
 
 	location *time.Location
 	now      func() time.Time
 }
 
 func NewService(repo *Repository, vehiclePort VehiclePort, maintenancePort MaintenancePort,
-	obligationPort ObligationPort, location *time.Location) *Service {
+	obligationPort ObligationPort, abastecimentoPort AbastecimentoPort, location *time.Location) *Service {
 	return &Service{
-		repo:        repo,
-		vehicle:     vehiclePort,
-		maintenance: maintenancePort,
-		obligation:  obligationPort,
-		location:    location,
-		now:         time.Now,
+		repo:          repo,
+		vehicle:       vehiclePort,
+		maintenance:   maintenancePort,
+		obligation:    obligationPort,
+		abastecimento: abastecimentoPort,
+		location:      location,
+		now:           time.Now,
 	}
 }
 
@@ -265,8 +272,13 @@ func (s *Service) Dashboard(ctx context.Context, userID, vehicleID uuid.UUID, co
 		return Dashboard{}, apperr.Internal(err)
 	}
 
+	lastFill, err := s.abastecimento.LastWithConsumption(ctx, userID, vehicleID)
+	if err != nil {
+		return Dashboard{}, err
+	}
+
 	return buildDashboard(summary, alerts, needsBaseline, profile, costs, costMonths, since,
-		dashboardAlertLimit), nil
+		dashboardAlertLimit, lastFill), nil
 }
 
 // Timeline returns one page of unified history.

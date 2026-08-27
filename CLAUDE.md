@@ -145,6 +145,7 @@ gofmt -l .                           # see the CRLF note below before believing 
 - **maintenance** — `GET|POST /v1/maintenance-items`, `GET|POST /v1/vehicles/{id}/maintenance-plans`, `PATCH|DELETE /v1/maintenance-plans/{id}`, `GET /v1/vehicles/{id}/maintenance-profile`, `POST /v1/vehicles/{id}/maintenance-profile/answers`, `GET|POST /v1/vehicles/{id}/maintenance-records`, `GET|PATCH|DELETE /v1/maintenance-records/{id}`. A seeded catalogue, plans materialised automatically on vehicle creation **and filtered by what the vehicle actually has**, records with line items, and the due engine.
 
 - **obligation** — `GET|POST /v1/vehicles/{id}/obligations`, `PATCH|DELETE /v1/obligations/{id}`, `GET|POST /v1/vehicles/{id}/seguros`, `PATCH|DELETE /v1/seguros/{id}`. IPVA and licenciamento share a table with an explicit `kind`; a seguro has its own, because it is a contract with a period rather than a dated debt.
+- **abastecimento** — `GET|POST /v1/vehicles/{id}/abastecimentos`, `GET|PATCH|DELETE /v1/abastecimentos/{id}`. A fill is a fact, not a plan: it produces an `odometer_reading` with `source = abastecimento` and does not reset any clock. Consumption is computed by `consumption.go` (full-tank to full-tank) and never stored. `GET /v1/vehicles/{id}` carries `refueling` derived from `fuel_type`.
 - **insight** — `GET /v1/vehicles/{id}/{dashboard,alerts,timeline}`. The read model.
 - **catalog** — `GET /v1/vehicle-brands`, `GET /v1/vehicle-brands/{id}/models`, `GET /v1/vehicle-models/{id}/years`, `GET /v1/vehicle-model-years/{id}`. The vehicle catalogue, mirrored from the FIPE table so registration is three dropdowns instead of three free-text fields. **The only module that talks to a third party.**
 
@@ -189,7 +190,7 @@ Under those sit the invariants: the odometer trigger and RN-01, aggregate atomic
 - **The app never sends a brand or model id.** It sends `catalog_model_year_id` alone and the server derives the other two, so an inconsistent triple is not expressible.
 - **No test reaches the real provider.** `newEnv` points the catalogue at `127.0.0.1:1`, which refuses instantly; a test that wants it working passes `withFipeServer(fake.URL)`. The fake serves payloads copied from the live API and counts requests — most assertions in `catalog_test.go` are about that count, not the body.
 
-**`internal/insight` is the only module allowed to depend on other modules.** The arrow is one-way and read-only: it calls the owning module's service and never re-derives a status. If you find yourself computing "overdue" inside insight, stop — the rule belongs to the module that owns the data, or the screen will drift from the domain behind it.
+**`internal/insight` is the only module allowed to depend on other modules.** The arrow is one-way and read-only: it calls the owning module's service and never re-derives a status or a consumption figure. If you find yourself computing "overdue" or km/L inside insight, stop — the rule belongs to the module that owns the data, or the screen will drift from the domain behind it.
 
 **Local-dev trap:** `TRUNCATE users CASCADE` cascades to *tables*, not rows, and wipes the global `maintenance_items` catalogue seeded by migration 000005 — which will not re-run. Clean test data with `DELETE FROM users` and `DELETE FROM vehicles` instead, or re-apply that migration file by hand. The automated suite sidesteps this entirely by cloning a fresh database per test rather than cleaning one; the trap is still live in the compose database you develop against.
 
@@ -220,7 +221,7 @@ Some of the facts `PRODUCT.md` lists as open were **decided during the backend b
 - **Authentication:** e-mail + password (argon2id), short-lived JWT plus a rotating opaque refresh token. Social login is deferred and additive.
 - **Vehicle types:** cars only in MVP-1. The `vehicle_type` column exists from the first migration so motorcycles become a catalogue seed, not a backfill.
 - **Fines (multas):** not tracked in MVP-1; an `expenses` category in MVP-2.
-- **Fuel logging:** not in MVP-1 at all — first item of MVP-2.
+- **Fuel logging:** implemented as `internal/abastecimento` (volume in millilitres, full-tank consumption). Electric recharge is out of scope (`refueling.supported: false`).
 - **IPVA/licenciamento calendars:** entered by the owner. No official-data integration in the MVP.
 - **FIPE:** SPEC.md listed it as deferred until after MVP-2. **It has since been built** — `internal/catalog`, migration 000009 — because it removes four free-text fields from the registration form, which is the first screen every user sees. What is built is the *catalogue*; the *valuation history* is stored (`vehicle_fipe_prices` keyed by reference month) but nothing reads more than the latest row yet.
 - **Receipt and document images:** deferred out of MVP-1. Object storage is the only new infrastructure this project would need, and nothing depends on it yet — `docker-compose.yml` is Postgres and nothing else.

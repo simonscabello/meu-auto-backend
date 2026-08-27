@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/simonscabello/meu-auto-backend/internal/abastecimento"
 	"github.com/simonscabello/meu-auto-backend/internal/catalog"
 	"github.com/simonscabello/meu-auto-backend/internal/identity"
 	"github.com/simonscabello/meu-auto-backend/internal/insight"
@@ -36,6 +37,7 @@ func newRouter(
 	catalogHandler *catalog.Handler,
 	maintenanceHandler *maintenance.Handler,
 	obligationHandler *obligation.Handler,
+	abastecimentoHandler *abastecimento.Handler,
 	insightHandler *insight.Handler,
 ) http.Handler {
 	r := chi.NewRouter()
@@ -85,6 +87,7 @@ func newRouter(
 		catalogHandler.Mount(r)
 		maintenanceHandler.Mount(r)
 		obligationHandler.Mount(r)
+		abastecimentoHandler.Mount(r)
 		insightHandler.Mount(r)
 	})
 

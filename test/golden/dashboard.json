@@ -20,15 +20,37 @@
       "overdue": "number"
     },
     "costs": {
+      "abastecimento_cents": "number",
+      "categories": [
+        {
+          "cents": "number",
+          "key": "string",
+          "label": "string"
+        }
+      ],
       "maintenance_cents": "number",
       "obligations_cents": "number",
       "period_months": "number",
       "seguro_cents": "number",
       "since": "string",
+      "total_cents": "number",
       "tracked_categories": [
         "string"
       ],
       "tracked_cents": "number"
+    },
+    "last_abastecimento": {
+      "consumption": {
+        "status": "string",
+        "unit": "string",
+        "value": "null"
+      },
+      "fuel": "string",
+      "id": "string",
+      "occurred_on": "string",
+      "price_per_liter_cents": "number",
+      "total_cost_cents": "number",
+      "volume_ml": "number"
     },
     "odometer": {
       "current_km": "number",

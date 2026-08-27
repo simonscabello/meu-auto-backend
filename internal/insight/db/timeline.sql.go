@@ -59,6 +59,21 @@ WITH entries AS (
     FROM odometer_readings o
     WHERE o.vehicle_id = $5
       AND o.source_maintenance_id IS NULL
+      AND o.source_abastecimento_id IS NULL
+
+    UNION ALL
+
+    SELECT 'abastecimento'::text,
+           a.id,
+           a.occurred_on,
+           a.created_at,
+           NULL::text,
+           a.fuel,
+           a.total_cost_cents,
+           a.mileage_km,
+           NULL::boolean
+    FROM abastecimentos a
+    WHERE a.vehicle_id = $5
 
     UNION ALL
 
@@ -116,8 +131,8 @@ type ListVehicleTimelineRow struct {
 // The UNION is what makes pagination correct: ordering and cursoring happen over the
 // combined set, so a page boundary never falls between two sources.
 //
-// Odometer readings produced BY a maintenance are excluded — they would appear twice, once
-// as the service and once as the reading it generated.
+// Odometer readings produced BY a maintenance or an abastecimento are excluded — they
+// would appear twice, once as the event and once as the reading it generated.
 func (q *Queries) ListVehicleTimeline(ctx context.Context, arg ListVehicleTimelineParams) ([]ListVehicleTimelineRow, error) {
 	rows, err := q.db.Query(ctx, listVehicleTimeline,
 		arg.CursorOccurredOn,
@@ -171,7 +186,12 @@ SELECT
     COALESCE((SELECT SUM(s.premium_cents)
                 FROM seguros s
                WHERE s.vehicle_id = $1
-                 AND s.starts_on >= $2), 0)::bigint AS seguro_cents
+                 AND s.starts_on >= $2), 0)::bigint AS seguro_cents,
+
+    COALESCE((SELECT SUM(a.total_cost_cents)
+                FROM abastecimentos a
+               WHERE a.vehicle_id = $1
+                 AND a.occurred_on >= $2), 0)::bigint AS abastecimento_cents
 `
 
 type SumVehicleCostsParams struct {
@@ -180,22 +200,27 @@ type SumVehicleCostsParams struct {
 }
 
 type SumVehicleCostsRow struct {
-	MaintenanceCents int64
-	ObligationsCents int64
-	SeguroCents      int64
+	MaintenanceCents   int64
+	ObligationsCents   int64
+	SeguroCents        int64
+	AbastecimentoCents int64
 }
 
 // Costs actually recorded, by category, since a cut-off date.
 //
-// NOT a running cost: fuel and general expenses do not exist yet (SPEC.md, MVP-1 scope), so
-// the response names exactly which categories are counted rather than presenting a total
-// the owner would read as complete.
-//
 // COALESCE makes every column genuinely NOT NULL, so a vehicle with no history reports
 // zeros instead of nulls the client has to special-case.
+//
+// abastecimento_cents is summed here but must NOT be folded into tracked_cents — that
+// field is frozen for the published app (see dashboardCosts in dto.go).
 func (q *Queries) SumVehicleCosts(ctx context.Context, arg SumVehicleCostsParams) (SumVehicleCostsRow, error) {
 	row := q.db.QueryRow(ctx, sumVehicleCosts, arg.VehicleID, arg.Since)
 	var i SumVehicleCostsRow
-	err := row.Scan(&i.MaintenanceCents, &i.ObligationsCents, &i.SeguroCents)
+	err := row.Scan(
+		&i.MaintenanceCents,
+		&i.ObligationsCents,
+		&i.SeguroCents,
+		&i.AbastecimentoCents,
+	)
 	return i, err
 }

@@ -20,6 +20,7 @@ func TestGetByIDMatchesListItem(t *testing.T) {
 	})
 	obligationID := u.createObligation(vehicleID)
 	seguroID := u.createSeguro(vehicleID)
+	abastecimentoID := u.createAbastecimento(vehicleID, 51_000)
 
 	assertGetMatchesListItem(t, u,
 		fmt.Sprintf("/v1/vehicles/%s/maintenance-plans", vehicleID),
@@ -30,6 +31,9 @@ func TestGetByIDMatchesListItem(t *testing.T) {
 	assertGetMatchesListItem(t, u,
 		fmt.Sprintf("/v1/vehicles/%s/seguros", vehicleID),
 		"/v1/seguros/")
+	assertGetMatchesListItem(t, u,
+		fmt.Sprintf("/v1/vehicles/%s/abastecimentos", vehicleID),
+		"/v1/abastecimentos/")
 
 	stranger := e.newUser()
 	stranger.get("/v1/maintenance-plans/"+u.firstPlanID(vehicleID)).
@@ -37,6 +41,8 @@ func TestGetByIDMatchesListItem(t *testing.T) {
 	stranger.get("/v1/obligations/"+obligationID).
 		expectError(http.StatusNotFound, "not_found")
 	stranger.get("/v1/seguros/"+seguroID).
+		expectError(http.StatusNotFound, "not_found")
+	stranger.get("/v1/abastecimentos/"+abastecimentoID).
 		expectError(http.StatusNotFound, "not_found")
 }
 

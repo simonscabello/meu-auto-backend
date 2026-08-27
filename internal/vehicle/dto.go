@@ -485,8 +485,15 @@ type vehicleResponse struct {
 	CurrentMileageKm int32   `json:"current_mileage_km"`
 	CurrentMileageAt *string `json:"current_mileage_at"`
 
+	Refueling refuelingResponse `json:"refueling"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type refuelingResponse struct {
+	Supported bool     `json:"supported"`
+	FuelTypes []string `json:"fuel_types"`
 }
 
 // uuidPtrString renders an optional id, keeping nil as nil so an absent link reaches the
@@ -499,7 +506,11 @@ func uuidPtrString(id *uuid.UUID) *string {
 	return &rendered
 }
 
-func toVehicleResponse(v db.Vehicle) vehicleResponse {
+func (s *Service) toVehicleResponse(v db.Vehicle) vehicleResponse {
+	supported, fuels := s.refueling.Capability(v.FuelType)
+	if fuels == nil {
+		fuels = []string{}
+	}
 	return vehicleResponse{
 		ID:              v.ID.String(),
 		VehicleType:     v.VehicleType,
@@ -522,6 +533,7 @@ func toVehicleResponse(v db.Vehicle) vehicleResponse {
 
 		CurrentMileageKm: v.CurrentMileageKm,
 		CurrentMileageAt: civil.FormatPtr(v.CurrentMileageAt),
+		Refueling:        refuelingResponse{Supported: supported, FuelTypes: fuels},
 		CreatedAt:        v.CreatedAt,
 		UpdatedAt:        v.UpdatedAt,
 	}

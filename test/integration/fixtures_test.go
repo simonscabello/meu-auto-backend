@@ -145,3 +145,15 @@ func (u *user) createSeguro(vehicleID string) string {
 		"broker_name":   "Corretora Teste",
 	}).expect(http.StatusCreated).id()
 }
+
+func (u *user) createAbastecimento(vehicleID string, mileageKm int) string {
+	u.t.Helper()
+
+	return u.post(fmt.Sprintf("/v1/vehicles/%s/abastecimentos", vehicleID), map[string]any{
+		"mileage_km":       mileageKm,
+		"volume_ml":        30_000,
+		"total_cost_cents": 20_000,
+		"fuel":             "gasolina",
+		"full_tank":        true,
+	}).expect(http.StatusCreated).id()
+}

@@ -17,6 +17,12 @@
     "model_year": "number",
     "nickname": "null",
     "plate": "null",
+    "refueling": {
+      "fuel_types": [
+        "string"
+      ],
+      "supported": "boolean"
+    },
     "renavam": "null",
     "updated_at": "string",
     "vehicle_type": "string",

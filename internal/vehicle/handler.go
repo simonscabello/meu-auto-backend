@@ -67,7 +67,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	// have to special-case "no vehicles yet".
 	out := make([]vehicleResponse, 0, len(vehicles))
 	for _, v := range vehicles {
-		out = append(out, toVehicleResponse(v))
+		out = append(out, h.service.toVehicleResponse(v))
 	}
 	httpx.JSON(w, r, http.StatusOK, map[string]any{"data": out})
 }
@@ -97,7 +97,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if created {
 		status = http.StatusCreated
 	}
-	httpx.JSON(w, r, status, toVehicleResponse(vehicle))
+	httpx.JSON(w, r, status, h.service.toVehicleResponse(vehicle))
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +112,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, err)
 		return
 	}
-	httpx.JSON(w, r, http.StatusOK, toVehicleResponse(vehicle))
+	httpx.JSON(w, r, http.StatusOK, h.service.toVehicleResponse(vehicle))
 }
 
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
@@ -133,7 +133,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, err)
 		return
 	}
-	httpx.JSON(w, r, http.StatusOK, toVehicleResponse(vehicle))
+	httpx.JSON(w, r, http.StatusOK, h.service.toVehicleResponse(vehicle))
 }
 
 func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +194,7 @@ func (h *Handler) createReading(w http.ResponseWriter, r *http.Request) {
 
 	httpx.JSON(w, r, http.StatusCreated, createReadingResponse{
 		Reading: toReadingResponse(reading),
-		Vehicle: toVehicleResponse(vehicle),
+		Vehicle: h.service.toVehicleResponse(vehicle),
 	})
 }
 

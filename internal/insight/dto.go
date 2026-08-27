@@ -3,6 +3,7 @@ package insight
 import (
 	"time"
 
+	"github.com/simonscabello/meu-auto-backend/internal/abastecimento"
 	"github.com/simonscabello/meu-auto-backend/internal/insight/db"
 	"github.com/simonscabello/meu-auto-backend/internal/maintenance"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/civil"
@@ -11,11 +12,12 @@ import (
 
 // Dashboard is the main screen in one response.
 type Dashboard struct {
-	Vehicle  dashboardVehicle  `json:"vehicle"`
-	Odometer dashboardOdometer `json:"odometer"`
-	Alerts   dashboardAlerts   `json:"alerts"`
-	Profile  dashboardProfile  `json:"profile"`
-	Costs    dashboardCosts    `json:"costs"`
+	Vehicle           dashboardVehicle    `json:"vehicle"`
+	Odometer          dashboardOdometer   `json:"odometer"`
+	Alerts            dashboardAlerts     `json:"alerts"`
+	Profile           dashboardProfile    `json:"profile"`
+	Costs             dashboardCosts      `json:"costs"`
+	LastAbastecimento *lastAbastecimento  `json:"last_abastecimento"`
 }
 
 // dashboardProfile is what the main screen needs to decide whether to show one discreet
@@ -63,11 +65,33 @@ type dashboardAlerts struct {
 	Items []Alert `json:"items"`
 }
 
-// dashboardCosts reports what has been RECORDED, not what the vehicle costs.
+type lastAbastecimento struct {
+	ID                 string                      `json:"id"`
+	OccurredOn         string                      `json:"occurred_on"`
+	TotalCostCents     int64                       `json:"total_cost_cents"`
+	VolumeMl           int32                       `json:"volume_ml"`
+	PricePerLiterCents int64                       `json:"price_per_liter_cents"`
+	Fuel               string                      `json:"fuel"`
+	Consumption        lastAbastecimentoConsumption `json:"consumption"`
+}
+
+type lastAbastecimentoConsumption struct {
+	Value  *float64 `json:"value"`
+	Unit   string   `json:"unit"`
+	Status string   `json:"status"`
+}
+
+// dashboardCosts reports what has been recorded in the cost window.
 //
-// Fuel and general expenses are not in MVP-1 (SPEC.md), so a field called "total" would be
-// read as the running cost and be wrong by most of it. TrackedCategories names exactly what
-// is counted, so the app can label the number honestly instead of guessing.
+// tracked_cents and tracked_categories are frozen at their original meaning
+// (manutenção + obrigações + seguro, no fuel). A published app draws three bars
+// against tracked_cents and shows "Combustível ainda não entra nesta conta."
+// when tracked_categories lacks "abastecimento". Folding fuel into those fields
+// would make the bars not add up and would hide that sentence.
+//
+// Remove them when telemetry shows no old app version is still in use. Until
+// then, the new app reads total_cents and categories; the old one stays
+// correct, just incomplete.
 type dashboardCosts struct {
 	PeriodMonths int32  `json:"period_months"`
 	Since        string `json:"since"`
@@ -78,6 +102,16 @@ type dashboardCosts struct {
 	TrackedCents     int64 `json:"tracked_cents"`
 
 	TrackedCategories []string `json:"tracked_categories"`
+
+	AbastecimentoCents int64          `json:"abastecimento_cents"`
+	TotalCents         int64          `json:"total_cents"`
+	Categories         []costCategory `json:"categories"`
+}
+
+type costCategory struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Cents int64  `json:"cents"`
 }
 
 func buildDashboard(
@@ -89,6 +123,7 @@ func buildDashboard(
 	costMonths int32,
 	since time.Time,
 	alertLimit int,
+	lastFill *abastecimento.LastFill,
 ) Dashboard {
 	overdue, dueSoon := 0, 0
 	for _, alert := range alerts {
@@ -132,16 +167,51 @@ func buildDashboard(
 			PowertrainKnown: profile.PowertrainKnown,
 			OpenQuestions:   len(profile.Questions),
 		},
-		Costs: dashboardCosts{
-			PeriodMonths:     costMonths,
-			Since:            civil.Format(since),
-			MaintenanceCents: costs.MaintenanceCents,
-			ObligationsCents: costs.ObligationsCents,
-			SeguroCents:      costs.SeguroCents,
-			TrackedCents:     costs.MaintenanceCents + costs.ObligationsCents + costs.SeguroCents,
-			TrackedCategories: []string{
-				"manutencao", "ipva", "licenciamento", "seguro",
-			},
+		Costs:             toDashboardCosts(costs, costMonths, since),
+		LastAbastecimento: toLastAbastecimento(lastFill),
+	}
+}
+
+func toDashboardCosts(costs db.SumVehicleCostsRow, costMonths int32, since time.Time) dashboardCosts {
+	categories := []costCategory{
+		{Key: "manutencao", Label: "Manutenção", Cents: costs.MaintenanceCents},
+		{Key: "obligations", Label: "IPVA e licenciamento", Cents: costs.ObligationsCents},
+		{Key: "seguro", Label: "Seguro", Cents: costs.SeguroCents},
+		{Key: "abastecimento", Label: "Combustível", Cents: costs.AbastecimentoCents},
+	}
+	var total int64
+	for _, category := range categories {
+		total += category.Cents
+	}
+	return dashboardCosts{
+		PeriodMonths:       costMonths,
+		Since:              civil.Format(since),
+		MaintenanceCents:   costs.MaintenanceCents,
+		ObligationsCents:   costs.ObligationsCents,
+		SeguroCents:        costs.SeguroCents,
+		TrackedCents:       costs.MaintenanceCents + costs.ObligationsCents + costs.SeguroCents,
+		TrackedCategories:  []string{"manutencao", "ipva", "licenciamento", "seguro"},
+		AbastecimentoCents: costs.AbastecimentoCents,
+		TotalCents:         total,
+		Categories:         categories,
+	}
+}
+
+func toLastAbastecimento(fill *abastecimento.LastFill) *lastAbastecimento {
+	if fill == nil {
+		return nil
+	}
+	return &lastAbastecimento{
+		ID:                 fill.ID.String(),
+		OccurredOn:         civil.Format(fill.OccurredOn),
+		TotalCostCents:     fill.TotalCostCents,
+		VolumeMl:           fill.VolumeMl,
+		PricePerLiterCents: fill.PricePerLiterCents,
+		Fuel:               fill.Fuel,
+		Consumption: lastAbastecimentoConsumption{
+			Value:  fill.Consumption.Value,
+			Unit:   fill.Consumption.Unit,
+			Status: string(fill.Consumption.Status),
 		},
 	}
 }

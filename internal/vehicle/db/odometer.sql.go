@@ -18,7 +18,7 @@ INSERT INTO odometer_readings (
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (id) DO NOTHING
-RETURNING id, vehicle_id, mileage_km, occurred_on, source, recorded_by_user_id, notes, created_at, source_maintenance_id
+RETURNING id, vehicle_id, mileage_km, occurred_on, source, recorded_by_user_id, notes, created_at, source_maintenance_id, source_abastecimento_id
 `
 
 type CreateOdometerReadingParams struct {
@@ -52,6 +52,7 @@ func (q *Queries) CreateOdometerReading(ctx context.Context, arg CreateOdometerR
 		&i.Notes,
 		&i.CreatedAt,
 		&i.SourceMaintenanceID,
+		&i.SourceAbastecimentoID,
 	)
 	return i, err
 }
@@ -69,7 +70,7 @@ func (q *Queries) DeleteOdometerReading(ctx context.Context, id uuid.UUID) (int6
 }
 
 const getNextOdometerReading = `-- name: GetNextOdometerReading :one
-SELECT id, vehicle_id, mileage_km, occurred_on, source, recorded_by_user_id, notes, created_at, source_maintenance_id
+SELECT id, vehicle_id, mileage_km, occurred_on, source, recorded_by_user_id, notes, created_at, source_maintenance_id, source_abastecimento_id
 FROM odometer_readings
 WHERE vehicle_id = $1
   AND occurred_on > $2
@@ -95,12 +96,13 @@ func (q *Queries) GetNextOdometerReading(ctx context.Context, arg GetNextOdomete
 		&i.Notes,
 		&i.CreatedAt,
 		&i.SourceMaintenanceID,
+		&i.SourceAbastecimentoID,
 	)
 	return i, err
 }
 
 const getOdometerReading = `-- name: GetOdometerReading :one
-SELECT id, vehicle_id, mileage_km, occurred_on, source, recorded_by_user_id, notes, created_at, source_maintenance_id FROM odometer_readings WHERE id = $1
+SELECT id, vehicle_id, mileage_km, occurred_on, source, recorded_by_user_id, notes, created_at, source_maintenance_id, source_abastecimento_id FROM odometer_readings WHERE id = $1
 `
 
 func (q *Queries) GetOdometerReading(ctx context.Context, id uuid.UUID) (OdometerReading, error) {
@@ -116,13 +118,14 @@ func (q *Queries) GetOdometerReading(ctx context.Context, id uuid.UUID) (Odomete
 		&i.Notes,
 		&i.CreatedAt,
 		&i.SourceMaintenanceID,
+		&i.SourceAbastecimentoID,
 	)
 	return i, err
 }
 
 const getPreviousOdometerReading = `-- name: GetPreviousOdometerReading :one
 
-SELECT id, vehicle_id, mileage_km, occurred_on, source, recorded_by_user_id, notes, created_at, source_maintenance_id
+SELECT id, vehicle_id, mileage_km, occurred_on, source, recorded_by_user_id, notes, created_at, source_maintenance_id, source_abastecimento_id
 FROM odometer_readings
 WHERE vehicle_id = $1
   AND occurred_on <= $2
@@ -159,12 +162,13 @@ func (q *Queries) GetPreviousOdometerReading(ctx context.Context, arg GetPreviou
 		&i.Notes,
 		&i.CreatedAt,
 		&i.SourceMaintenanceID,
+		&i.SourceAbastecimentoID,
 	)
 	return i, err
 }
 
 const listOdometerReadings = `-- name: ListOdometerReadings :many
-SELECT id, vehicle_id, mileage_km, occurred_on, source, recorded_by_user_id, notes, created_at, source_maintenance_id
+SELECT id, vehicle_id, mileage_km, occurred_on, source, recorded_by_user_id, notes, created_at, source_maintenance_id, source_abastecimento_id
 FROM odometer_readings
 WHERE vehicle_id = $1
   AND (
@@ -213,6 +217,7 @@ func (q *Queries) ListOdometerReadings(ctx context.Context, arg ListOdometerRead
 			&i.Notes,
 			&i.CreatedAt,
 			&i.SourceMaintenanceID,
+			&i.SourceAbastecimentoID,
 		); err != nil {
 			return nil, err
 		}

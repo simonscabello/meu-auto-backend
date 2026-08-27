@@ -1,0 +1,23 @@
+{
+  "body": {
+    "consumption": {
+      "status": "string",
+      "unit": "string",
+      "value": "null"
+    },
+    "created_at": "string",
+    "fuel": "string",
+    "full_tank": "boolean",
+    "id": "string",
+    "mileage_km": "number",
+    "notes": "string",
+    "occurred_on": "string",
+    "price_per_liter_cents": "number",
+    "station_name": "string",
+    "total_cost_cents": "number",
+    "updated_at": "string",
+    "vehicle_id": "string",
+    "volume_ml": "number"
+  },
+  "status": 200
+}

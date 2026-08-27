@@ -53,13 +53,14 @@ type protectedRoute struct {
 
 // ownedResources is one full set of resources belonging to a single account.
 type ownedResources struct {
-	vehicleID    string
-	readingID    string
-	planID       string
-	recordID     string
-	obligationID string
-	seguroID     string
-	itemID       string
+	vehicleID       string
+	readingID       string
+	planID          string
+	recordID        string
+	obligationID    string
+	seguroID        string
+	itemID          string
+	abastecimentoID string
 }
 
 func newOwnedResources(u *user) *ownedResources {
@@ -67,13 +68,14 @@ func newOwnedResources(u *user) *ownedResources {
 
 	vehicleID := u.createVehicle()
 	return &ownedResources{
-		vehicleID:    vehicleID,
-		readingID:    u.createReading(vehicleID, 51_000, ""),
-		planID:       u.firstPlanID(vehicleID),
-		recordID:     u.createRecord(vehicleID, 52_000, ""),
-		obligationID: u.createObligation(vehicleID),
-		seguroID:     u.createSeguro(vehicleID),
-		itemID:       u.firstItemID(),
+		vehicleID:       vehicleID,
+		readingID:       u.createReading(vehicleID, 51_000, ""),
+		planID:          u.firstPlanID(vehicleID),
+		recordID:        u.createRecord(vehicleID, 52_000, ""),
+		obligationID:    u.createObligation(vehicleID),
+		seguroID:        u.createSeguro(vehicleID),
+		itemID:          u.firstItemID(),
+		abastecimentoID: u.createAbastecimento(vehicleID, 53_000),
 	}
 }
 
@@ -244,6 +246,27 @@ func protectedRoutes() []protectedRoute {
 			func(f *ownedResources) string { return "/v1/seguros/" + f.seguroID },
 			nil, hiddenFromStrangers},
 
+		// ---------- abastecimento ----------
+		{http.MethodGet, "/v1/vehicles/{vehicleID}/abastecimentos",
+			vehiclePath("/abastecimentos"), nil, hiddenFromStrangers},
+		{http.MethodPost, "/v1/vehicles/{vehicleID}/abastecimentos",
+			vehiclePath("/abastecimentos"),
+			func(*ownedResources) any {
+				return map[string]any{
+					"mileage_km": 54_000, "volume_ml": 30_000,
+					"total_cost_cents": 20_000, "fuel": "gasolina",
+				}
+			}, hiddenFromStrangers},
+		{http.MethodGet, "/v1/abastecimentos/{abastecimentoID}",
+			func(f *ownedResources) string { return "/v1/abastecimentos/" + f.abastecimentoID },
+			nil, hiddenFromStrangers},
+		{http.MethodPatch, "/v1/abastecimentos/{abastecimentoID}",
+			func(f *ownedResources) string { return "/v1/abastecimentos/" + f.abastecimentoID },
+			empty, hiddenFromStrangers},
+		{http.MethodDelete, "/v1/abastecimentos/{abastecimentoID}",
+			func(f *ownedResources) string { return "/v1/abastecimentos/" + f.abastecimentoID },
+			nil, hiddenFromStrangers},
+
 		// ---------- insight ----------
 		{http.MethodGet, "/v1/vehicles/{vehicleID}/dashboard",
 			vehiclePath("/dashboard"), nil, hiddenFromStrangers},
@@ -337,9 +360,10 @@ func TestUnknownResourceIdsAreNotFound(t *testing.T) {
 		readingID:    uuid.NewString(),
 		planID:       uuid.NewString(),
 		recordID:     uuid.NewString(),
-		obligationID: uuid.NewString(),
-		seguroID:     uuid.NewString(),
-		itemID:       u.firstItemID(),
+		obligationID:    uuid.NewString(),
+		seguroID:        uuid.NewString(),
+		itemID:          u.firstItemID(),
+		abastecimentoID: uuid.NewString(),
 	}
 
 	for _, route := range protectedRoutes() {
@@ -368,6 +392,7 @@ func TestMalformedResourceIdsAreRejected(t *testing.T) {
 		"/v1/vehicles/not-a-uuid/maintenance-records",
 		"/v1/vehicles/not-a-uuid/obligations",
 		"/v1/vehicles/not-a-uuid/seguros",
+		"/v1/vehicles/not-a-uuid/abastecimentos",
 		"/v1/vehicles/not-a-uuid/dashboard",
 		"/v1/vehicles/not-a-uuid/alerts",
 		"/v1/vehicles/not-a-uuid/timeline",
@@ -375,6 +400,7 @@ func TestMalformedResourceIdsAreRejected(t *testing.T) {
 		"/v1/maintenance-records/not-a-uuid",
 		"/v1/obligations/not-a-uuid",
 		"/v1/seguros/not-a-uuid",
+		"/v1/abastecimentos/not-a-uuid",
 	} {
 		t.Run(path, func(t *testing.T) {
 			res := u.get(path)

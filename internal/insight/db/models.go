@@ -10,6 +10,22 @@ import (
 	"github.com/google/uuid"
 )
 
+type Abastecimento struct {
+	ID               uuid.UUID
+	VehicleID        uuid.UUID
+	OccurredOn       time.Time
+	MileageKm        int32
+	VolumeMl         int32
+	TotalCostCents   int64
+	Fuel             string
+	FullTank         bool
+	StationName      *string
+	Notes            *string
+	RecordedByUserID *uuid.UUID
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
 type MaintenanceItem struct {
 	ID                    uuid.UUID
 	Slug                  string
@@ -75,15 +91,16 @@ type MaintenanceRecordItem struct {
 }
 
 type OdometerReading struct {
-	ID                  uuid.UUID
-	VehicleID           uuid.UUID
-	MileageKm           int32
-	OccurredOn          time.Time
-	Source              string
-	RecordedByUserID    *uuid.UUID
-	Notes               *string
-	CreatedAt           time.Time
-	SourceMaintenanceID *uuid.UUID
+	ID                    uuid.UUID
+	VehicleID             uuid.UUID
+	MileageKm             int32
+	OccurredOn            time.Time
+	Source                string
+	RecordedByUserID      *uuid.UUID
+	Notes                 *string
+	CreatedAt             time.Time
+	SourceMaintenanceID   *uuid.UUID
+	SourceAbastecimentoID *uuid.UUID
 }
 
 type PasswordResetToken struct {

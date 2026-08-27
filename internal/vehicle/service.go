@@ -47,6 +47,14 @@ type CatalogPort interface {
 	ResolveModelYear(ctx context.Context, modelYearID uuid.UUID) (brandID, modelID uuid.UUID, err error)
 }
 
+// RefuelingPort is what this module needs to say which fuels a vehicle accepts.
+//
+// Declared here and satisfied by internal/abastecimento: the function reads fuel_type
+// and does not know any abastecimento table. Primitive returns, no shared struct.
+type RefuelingPort interface {
+	Capability(fuelType *string) (supported bool, fuelTypes []string)
+}
+
 // Service holds the vehicle and odometer rules. It is the only layer here that builds
 // apperr values, so every client-visible message for this module sits in one place.
 type Service struct {
@@ -61,6 +69,10 @@ type Service struct {
 	// foreign key.
 	catalog CatalogPort
 
+	// refueling reports what this vehicle can burn. Required on every read: the field is
+	// derived, never stored, and an electric car must say so rather than offer a form.
+	refueling RefuelingPort
+
 	log *slog.Logger
 
 	// location is America/Sao_Paulo. It matters for exactly one thing: deciding what
@@ -72,8 +84,8 @@ type Service struct {
 	now func() time.Time
 }
 
-func NewService(repo *Repository, catalog CatalogPort, location *time.Location, log *slog.Logger) *Service {
-	return &Service{repo: repo, catalog: catalog, location: location, log: log, now: time.Now}
+func NewService(repo *Repository, catalog CatalogPort, refueling RefuelingPort, location *time.Location, log *slog.Logger) *Service {
+	return &Service{repo: repo, catalog: catalog, refueling: refueling, location: location, log: log, now: time.Now}
 }
 
 // today is the current civil date in São Paulo, normalised to UTC midnight so it round
@@ -383,9 +395,9 @@ func (s *Service) CreateReading(ctx context.Context, userID, vehicleID uuid.UUID
 // a hard block. Odometers really do get replaced, and a product that calls its user a liar
 // about their own car loses.
 //
-// Exported because the maintenance module needs the same rule: a service record carries a
-// mileage and produces a reading, so it must satisfy the same invariant. Sharing the
-// method rather than the query is what keeps one definition of the rule.
+// Exported because the maintenance and abastecimento modules need the same rule: both
+// carry a mileage and produce a reading, so both must satisfy the same invariant. Sharing
+// the method rather than the query is what keeps one definition of the rule.
 func (s *Service) CheckOdometerConsistency(ctx context.Context, vehicleID uuid.UUID, occurredOn time.Time, mileageKm int32) error {
 	previous, next, err := s.repo.NeighbouringReadings(ctx, vehicleID, occurredOn)
 	if err != nil {

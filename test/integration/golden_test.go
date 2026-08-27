@@ -227,8 +227,28 @@ func TestGoldenResponses(t *testing.T) {
 
 	// ---------- read models ----------
 
-	assertGolden(t, "dashboard", u.get(vehiclePath+"/dashboard").expect(http.StatusOK))
 	assertGolden(t, "alerts", u.get(vehiclePath+"/alerts").expect(http.StatusOK))
+
+	fill := u.post(vehiclePath+"/abastecimentos", map[string]any{
+		"occurred_on":      e.today().Format("2006-01-02"),
+		"mileage_km":       96_420,
+		"volume_ml":        34_700,
+		"total_cost_cents": 23_840,
+		"fuel":             "gasolina",
+		"full_tank":        true,
+		"station_name":     "Posto do Zé",
+		"notes":            "Tanque cheio.",
+	}).expect(http.StatusCreated)
+	assertGolden(t, "abastecimento_create", fill)
+	assertGolden(t, "abastecimento_get",
+		u.get("/v1/abastecimentos/"+fill.id()).expect(http.StatusOK))
+	assertGolden(t, "abastecimentos_list",
+		u.get(vehiclePath+"/abastecimentos").expect(http.StatusOK))
+
+	// Dashboard and timeline after the fill so the golden files pin last_abastecimento,
+	// the new cost fields, and kind: abastecimento — shapes the empty vehicle does not
+	// produce.
+	assertGolden(t, "dashboard", u.get(vehiclePath+"/dashboard").expect(http.StatusOK))
 	assertGolden(t, "timeline", u.get(vehiclePath+"/timeline").expect(http.StatusOK))
 
 	// ---------- the error envelope ----------

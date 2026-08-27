@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/simonscabello/meu-auto-backend/internal/abastecimento"
 	"github.com/simonscabello/meu-auto-backend/internal/catalog"
 	"github.com/simonscabello/meu-auto-backend/internal/catalog/fipe"
 	"github.com/simonscabello/meu-auto-backend/internal/identity"
@@ -60,8 +61,12 @@ func New(cfg config.Config, deps Deps) http.Handler {
 	// catalogService satisfies vehicle.CatalogPort structurally — the interface is declared
 	// in vehicle and its signature is primitives only, so neither package imports the
 	// other and the wiring is the only place that knows they meet.
+	//
+	// abastecimento.Capability satisfies vehicle.RefuelingPort the same way: it reads
+	// fuel_type and does not know any abastecimento table.
 	vehicleService := vehicle.NewService(
-		vehicle.NewRepository(deps.Pool), catalogService, deps.Location, deps.Log)
+		vehicle.NewRepository(deps.Pool), catalogService, abastecimento.Capability{},
+		deps.Location, deps.Log)
 	vehicleHandler := vehicle.NewHandler(vehicleService, tokens)
 
 	// Maintenance depends on vehicle for authorisation, and vehicle depends on
@@ -77,11 +82,16 @@ func New(cfg config.Config, deps Deps) http.Handler {
 		obligation.NewRepository(deps.Pool), vehicleService, deps.Location)
 	obligationHandler := obligation.NewHandler(obligationService, tokens)
 
+	abastecimentoService := abastecimento.NewService(
+		abastecimento.NewRepository(deps.Pool), vehicleService, deps.Location)
+	abastecimentoHandler := abastecimento.NewHandler(abastecimentoService, tokens)
+
 	// The read model composes the other modules rather than re-deriving anything, so it is
-	// built last and depends on all three.
+	// built last and depends on all of them. Consumption on last_abastecimento is asked of
+	// abastecimentoService through the port — not recomputed here.
 	insightHandler := insight.NewHandler(
 		insight.NewService(insight.NewRepository(deps.Pool), vehicleService,
-			maintenanceService, obligationService, deps.Location),
+			maintenanceService, obligationService, abastecimentoService, deps.Location),
 		tokens)
 
 	identityHandler := identity.NewHandler(
@@ -92,5 +102,5 @@ func New(cfg config.Config, deps Deps) http.Handler {
 	)
 
 	return newRouter(cfg, deps.Pool, identityHandler, vehicleHandler, catalogHandler,
-		maintenanceHandler, obligationHandler, insightHandler)
+		maintenanceHandler, obligationHandler, abastecimentoHandler, insightHandler)
 }

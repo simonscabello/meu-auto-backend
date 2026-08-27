@@ -75,6 +75,8 @@ tags:
     description: Catálogo, planos preventivos e manutenções realizadas
   - name: prazos
     description: IPVA, licenciamento e seguro
+  - name: abastecimento
+    description: Abastecimentos e consumo por tanque cheio
   - name: telas
     description: Read models — dashboard, alertas e linha do tempo
   - name: operacao
@@ -1154,6 +1156,109 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  # ---------------------------------------------------------------- abastecimento
+  /v1/vehicles/{vehicleId}/abastecimentos:
+    parameters:
+      - $ref: "#/components/parameters/VehicleId"
+    get:
+      operationId: listAbastecimentos
+      tags: [abastecimento]
+      summary: Abastecimentos
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Uma página do histórico, mais recente primeiro
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AbastecimentoPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    post:
+      operationId: createAbastecimento
+      tags: [abastecimento]
+      summary: Registrar abastecimento
+      description: |
+        `volume_ml` e `total_cost_cents` são a fonte da verdade. `price_per_liter_cents`
+        e `consumption` são derivados na leitura e nunca armazenados.
+
+        A quilometragem gera uma leitura de odômetro com `source = abastecimento`. Envie
+        `source: "correction"` para pular a checagem de vizinhos (RN-01) — a leitura
+        gravada continua com `source = abastecimento`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateAbastecimentoRequest" }
+      responses:
+        "200":
+          description: O `id` enviado já existia neste veículo — retentativa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Abastecimento" }
+        "201":
+          description: Abastecimento registrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Abastecimento" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422":
+          description: Dados inválidos, combustível recusado, ou quilometragem inconsistente
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/abastecimentos/{abastecimentoId}:
+    parameters:
+      - name: abastecimentoId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getAbastecimento
+      tags: [abastecimento]
+      summary: Ver abastecimento
+      description: O mesmo shape de um item da listagem, com `consumption` já calculado.
+      responses:
+        "200":
+          description: O abastecimento
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Abastecimento" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateAbastecimento
+      tags: [abastecimento]
+      summary: Atualizar abastecimento
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateAbastecimentoRequest" }
+      responses:
+        "200":
+          description: Abastecimento atualizado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Abastecimento" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    delete:
+      operationId: deleteAbastecimento
+      tags: [abastecimento]
+      summary: Apagar abastecimento
+      description: A leitura de odômetro gerada some junto (CASCADE).
+      responses:
+        "204": { description: Abastecimento apagado }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   # ---------------------------------------------------------------- telas
   /v1/vehicles/{vehicleId}/dashboard:
     parameters:
@@ -1215,11 +1320,11 @@ paths:
       tags: [telas]
       summary: Histórico unificado do veículo
       description: |
-        Manutenções, leituras manuais de quilometragem e pagamentos de IPVA/licenciamento na
-        mesma linha do tempo, mais recente primeiro.
+        Manutenções, leituras manuais de quilometragem, abastecimentos e pagamentos de
+        IPVA/licenciamento na mesma linha do tempo, mais recente primeiro.
 
-        Leituras de odômetro geradas **por** uma manutenção não aparecem — apareceriam duas
-        vezes.
+        Leituras de odômetro geradas **por** uma manutenção ou um abastecimento não
+        aparecem — apareceriam duas vezes.
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Cursor"
@@ -1472,7 +1577,7 @@ components:
 
     TimelineEntryKind:
       type: string
-      enum: [manutencao, odometro, ipva, licenciamento]
+      enum: [manutencao, odometro, ipva, licenciamento, abastecimento]
 
     # ------------------------------------------------------------ auth e conta
     RegisterRequest:
@@ -1709,6 +1814,13 @@ components:
           format: date
           nullable: true
           description: Data da leitura que produziu `current_mileage_km`.
+        refueling:
+          $ref: "#/components/schemas/RefuelingCapability"
+          description: |
+            O que este veículo aceita abastecer. Derivado de `fuel_type`, nunca armazenado.
+            A API sempre envia. Um elétrico traz `supported: false` e `fuel_types: []`.
+            `fuel_type` nulo ou desconhecido traz a lista permissiva — desconhecido não
+            decide (RN-11).
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
@@ -2240,6 +2352,132 @@ components:
           items: { $ref: "#/components/schemas/MaintenanceRecord" }
         next_cursor: { type: string, nullable: true }
 
+    # ------------------------------------------------------------ abastecimento
+    AbastecimentoFuel:
+      type: string
+      enum: [gasolina, etanol, diesel, gnv]
+      description: |
+        O combustível deste abastecimento, não o `fuel_type` do veículo. Um flex queima
+        gasolina ou etanol; "flex" não é um valor válido aqui.
+
+    ConsumptionStatus:
+      type: string
+      enum: [ok, insufficient_data, partial_fill, unavailable]
+
+    Consumption:
+      type: object
+      required: [value, unit, status]
+      properties:
+        value:
+          type: number
+          nullable: true
+          description: |
+            km/L arredondado a duas casas no servidor. `null` sempre que `status` não é
+            `ok`. O app formata para uma casa.
+        unit:
+          type: string
+          enum: [km_per_liter]
+          description: Sempre `km_per_liter`. String fixa, para uma unidade futura não ser uma quebra.
+        status: { $ref: "#/components/schemas/ConsumptionStatus" }
+
+    RefuelingCapability:
+      type: object
+      required: [supported, fuel_types]
+      properties:
+        supported: { type: boolean }
+        fuel_types:
+          type: array
+          items: { $ref: "#/components/schemas/AbastecimentoFuel" }
+          description: |
+            Vazio quando `supported` é false. Recarga elétrica entra por esse gancho,
+            sem refazer o objeto.
+
+    Abastecimento:
+      type: object
+      required:
+        [id, vehicle_id, occurred_on, mileage_km, volume_ml, total_cost_cents,
+         price_per_liter_cents, fuel, full_tank, consumption, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        vehicle_id: { type: string, format: uuid }
+        occurred_on: { type: string, format: date }
+        mileage_km: { type: integer, format: int32, minimum: 0 }
+        volume_ml:
+          type: integer
+          format: int32
+          minimum: 1
+          description: Litros × 1000. Fonte da verdade, junto com `total_cost_cents`.
+        total_cost_cents: { type: integer, format: int64, minimum: 0 }
+        price_per_liter_cents:
+          type: integer
+          format: int64
+          description: |
+            Derivado. `(total_cost_cents * 1000 + volume_ml/2) / volume_ml`, meio para cima.
+            Nunca armazenado.
+        fuel: { $ref: "#/components/schemas/AbastecimentoFuel" }
+        full_tank: { type: boolean }
+        station_name: { type: string, nullable: true, maxLength: 120 }
+        notes: { type: string, nullable: true, maxLength: 500 }
+        consumption: { $ref: "#/components/schemas/Consumption" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AbastecimentoPage:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Abastecimento" }
+        next_cursor: { type: string, nullable: true }
+
+    CreateAbastecimentoRequest:
+      type: object
+      required: [mileage_km, volume_ml, total_cost_cents, fuel]
+      properties:
+        id: { type: string, format: uuid, nullable: true }
+        occurred_on:
+          type: string
+          format: date
+          nullable: true
+          description: Padrão é hoje. Não pode estar no futuro.
+        mileage_km: { type: integer, format: int32, minimum: 0 }
+        volume_ml: { type: integer, format: int32, minimum: 1 }
+        total_cost_cents: { type: integer, format: int64, minimum: 0 }
+        fuel: { $ref: "#/components/schemas/AbastecimentoFuel" }
+        full_tank:
+          type: boolean
+          description: Padrão `true`.
+        station_name: { type: string, nullable: true, maxLength: 120 }
+        notes: { type: string, nullable: true, maxLength: 500 }
+        source:
+          type: string
+          enum: [manual, correction]
+          description: |
+            Instrução de validação, não a origem gravada na leitura de odômetro. Ausente
+            equivale a `manual`. `correction` ignora a checagem de vizinhos (RN-01).
+            `abastecimento` e `maintenance` são recusados. A leitura gerada continua com
+            `source = abastecimento`.
+
+    UpdateAbastecimentoRequest:
+      type: object
+      properties:
+        occurred_on: { type: string, format: date, nullable: true }
+        mileage_km: { type: integer, format: int32, nullable: true, minimum: 0 }
+        volume_ml: { type: integer, format: int32, nullable: true, minimum: 1 }
+        total_cost_cents: { type: integer, format: int64, nullable: true, minimum: 0 }
+        fuel: { $ref: "#/components/schemas/AbastecimentoFuel" }
+        full_tank: { type: boolean }
+        station_name: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        source:
+          type: string
+          enum: [manual, correction]
+          description: |
+            Instrução de validação, não a origem gravada na leitura de odômetro. Ausente
+            equivale a `manual`. `correction` ignora a checagem de vizinhos (RN-01).
+            A leitura deste abastecimento continua com `source = abastecimento`.
+
     # ------------------------------------------------------------ prazos
     CreateObligationRequest:
       type: object
@@ -2435,15 +2673,25 @@ components:
                 `false` quando o veículo não tem combustível informado — a única lacuna que
                 impede derivar qualquer coisa sobre o motor.
             open_questions: { type: integer }
+        last_abastecimento:
+          nullable: true
+          description: |
+            O abastecimento mais recente, com o consumo já derivado pelo módulo. Ausente
+            ou `null` quando o veículo não tem nenhum. Não é alerta — um abastecimento não
+            vence e não pede ação.
+          allOf:
+            - $ref: "#/components/schemas/DashboardLastAbastecimento"
         costs:
           type: object
           required:
-            [period_months, since, maintenance_cents, obligations_cents, seguro_cents, tracked_cents, tracked_categories]
+            [period_months, since, maintenance_cents, obligations_cents, seguro_cents,
+             tracked_cents, tracked_categories, abastecimento_cents, total_cents, categories]
           description: |
-            **Não é o custo de rodar o veículo.** Abastecimento e despesas avulsas não
-            existem no MVP-1, então `tracked_cents` é a soma apenas do que está listado em
-            `tracked_categories`. Rotule na interface como "custo registrado", nunca como
-            "custo total".
+            `tracked_cents` e `tracked_categories` estão **congelados** no significado
+            original (manutenção + IPVA/licenciamento + seguro), para um app já publicado
+            continuar desenhando três barras que somam o total exibido. Combustível entra
+            em `abastecimento_cents`, `total_cents` e `categories`. Remova os campos velhos
+            quando a telemetria mostrar que nenhuma versão antiga do app está em uso.
           properties:
             period_months: { type: integer, format: int32 }
             since: { type: string, format: date }
@@ -2454,6 +2702,36 @@ components:
             tracked_categories:
               type: array
               items: { type: string }
+            abastecimento_cents: { type: integer, format: int64 }
+            total_cents:
+              type: integer
+              format: int64
+              description: Soma de `categories[].cents`. O app novo lê este campo.
+            categories:
+              type: array
+              items: { $ref: "#/components/schemas/CostCategory" }
+
+    DashboardLastAbastecimento:
+      type: object
+      required: [id, occurred_on, total_cost_cents, volume_ml, price_per_liter_cents, fuel, consumption]
+      properties:
+        id: { type: string, format: uuid }
+        occurred_on: { type: string, format: date }
+        total_cost_cents: { type: integer, format: int64 }
+        volume_ml: { type: integer, format: int32 }
+        price_per_liter_cents: { type: integer, format: int64 }
+        fuel: { $ref: "#/components/schemas/AbastecimentoFuel" }
+        consumption: { $ref: "#/components/schemas/Consumption" }
+
+    CostCategory:
+      type: object
+      required: [key, label, cents]
+      properties:
+        key: { type: string }
+        label:
+          type: string
+          description: Rótulo pt-BR. Vem do servidor para uma categoria nova não exigir release do app.
+        cents: { type: integer, format: int64 }
 
     TimelineEntry:
       type: object
@@ -2475,8 +2753,8 @@ components:
           type: string
           nullable: true
           description: |
-            Oficina numa manutenção, origem numa leitura de odômetro, ano de referência num
-            débito.
+            Oficina numa manutenção, origem numa leitura de odômetro, combustível num
+            abastecimento, ano de referência num débito.
         amount_cents:
           type: integer
           format: int64

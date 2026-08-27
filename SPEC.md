@@ -44,12 +44,13 @@ Consequências:
 | 7 | Prazos com data fixa: IPVA, licenciamento, seguro |
 | 8 | Dashboard do veículo (uma request) |
 | 9 | Lembretes recorrentes de cuidado — **reusando o motor de planos**, sem entidade nova |
+| 10 | Abastecimento (volume, custo, consumo por tanque cheio) |
 
 ### Fora do MVP-1 (e por quê)
 
 | Item | Motivo |
 |---|---|
-| Abastecimento | Feature de retenção semanal, mas ~40% de escopo. Primeiro item do MVP-2. |
+| Abastecimento | **Implementado.** `internal/abastecimento`, consumo por tanque cheio derivado. |
 | Despesas avulsas | Sem combustível, o relatório de custo estaria incompleto de qualquer forma. |
 | Anexos / fotos | **Única infra nova do projeto** (object storage). MVP-1 = só Postgres. |
 | Push notification | O app faz pull do dashboard. Nenhuma tabela de notificação agora. |
@@ -167,7 +168,7 @@ aparece depois que o cliente que omite km (Fase 7 do app) for publicado. Campo n
 
 Não existe tabela-razão central. Cada evento carrega seu próprio valor:
 `maintenance_records.total_cost_cents`, `vehicle_obligations.paid_amount_cents`,
-`seguros.premium_cents`, `abastecimentos.total_cost_cents` (MVP-2),
+`seguros.premium_cents`, `abastecimentos.total_cost_cents`,
 `expenses.amount_cents` (MVP-2).
 
 **A duplicidade é impedida por constraint, não por disciplina:**
@@ -430,10 +431,12 @@ O `vehicles` ganha `catalog_brand_id`, `catalog_model_id`, `catalog_model_year_i
 
 ### MVP-2 (modeladas, não implementadas)
 
-- **`abastecimentos`** — `occurred_on`, `mileage_km`, `liters`, `price_per_liter_cents`,
-  `total_cost_cents`, `station_name`, `is_full_tank`, `fuel_type`.
 - **`expenses`** — `occurred_on`, `category` (com o CHECK da RN-04), `amount_cents`.
 - **`attachments`** — `owner_type`, `owner_id`, `storage_key`, `mime`, `size_bytes`.
+
+`abastecimentos` saiu desta lista: volume em mililitros (`volume_ml`), custo em centavos,
+`fuel` ∈ gasolina|etanol|diesel|gnv, `full_tank`. `price_per_liter_cents` e o consumo são
+derivados, nunca armazenados. Consumo é tanque cheio a tanque cheio (`consumption.go`).
 
 ---
 
@@ -457,7 +460,7 @@ users ──< vehicle_ownerships >── vehicles ──┬── odometer_readi
                                    │        ├── seguros
                                    │        │
                                    │        ├── expenses          [MVP-2]
-                                   │        └── abastecimentos    [MVP-2]
+                                   │        └── abastecimentos
                                    │
                                    └── (histórico carrega recorded_by_user_id)
 
@@ -786,27 +789,29 @@ mexer num DTO precisa mexer no spec na mesma alteração.
 ### D-14 — O read model compõe, não recalcula
 
 `internal/insight` é o **único** módulo que depende dos outros. A dependência é estritamente
-de mão única (insight → vehicle, maintenance, obligation; nada importa insight) e somente
-de leitura.
+de mão única (insight → vehicle, maintenance, obligation, abastecimento; nada importa
+insight) e somente de leitura.
 
 **A regra que importa:** ele chama os services dos donos e nunca reimplementa a derivação.
-Recalcular "vencido" aqui criaria duas definições que podem divergir, e a tela passaria a
-discordar do domínio atrás dela. O `Alert` unificado é uma **projeção**, não uma entidade
-genérica de lembrete: nada é armazenado nesse formato, cada domínio mantém sua tabela e sua
-regra, e o tipo existe só para uma tela mostrar correia, IPVA e garantia na mesma lista.
+Recalcular "vencido" ou o consumo aqui criaria duas definições que podem divergir, e a tela
+passaria a discordar do domínio atrás dela. O `Alert` unificado é uma **projeção**, não uma
+entidade genérica de lembrete: nada é armazenado nesse formato, cada domínio mantém sua
+tabela e sua regra, e o tipo existe só para uma tela mostrar correia, IPVA e garantia na
+mesma lista. Abastecimento **não** vira alerta — não vence e não pede ação.
 
 Duas queries próprias, ambas read-only, porque nenhum service consegue entregá-las:
 a **timeline** (UNION com paginação por keyset sobre o conjunto combinado) e a **soma de
-custos**.
+custos**. Consumo do último abastecimento vem do módulo, por interface.
 
 **`sem_baseline` não é alerta.** É prompt de configuração, não prazo — listar 17 deles no
 dia em que o veículo é criado enterraria a única coisa realmente vencida. O dashboard conta
 separadamente.
 
-**O dashboard não diz "custo total".** `tracked_categories` nomeia exatamente o que está
-somado (manutenção, IPVA, licenciamento, seguro), porque combustível e despesas não existem
-no MVP-1 e um campo chamado `total` seria lido como custo real e estaria errado pela maior
-parte dele.
+**`tracked_cents` está congelado.** Manutenção + obrigações + seguro, sem combustível, para
+o app publicado continuar desenhando três barras que somam o total exibido.
+`abastecimento_cents`, `total_cents` e `categories` são os campos novos. O gatilho para
+remover os campos velhos é a telemetria mostrar que nenhuma versão antiga do app está mais
+em uso.
 
 ### D-13 — Aritmética de data civil num só lugar
 

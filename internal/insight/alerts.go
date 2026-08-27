@@ -2,10 +2,10 @@
 // cost, what has been done".
 //
 // It is the ONE module allowed to depend on the other domain modules (SPEC.md section 5).
-// The dependency is strictly one-way — insight imports vehicle, maintenance and obligation;
-// nothing imports insight — and it is read-only. It writes nothing, owns no table, and
-// enforces no rule of its own: every status it shows is computed by the module that owns
-// the rule, so a screen can never disagree with the domain behind it.
+// The dependency is strictly one-way — insight imports vehicle, maintenance, obligation
+// and abastecimento; nothing imports insight — and it is read-only. It writes nothing,
+// owns no table, and enforces no rule of its own: every status it shows is computed by
+// the module that owns the rule, so a screen can never disagree with the domain behind it.
 package insight
 
 import (
