@@ -144,6 +144,18 @@ func TestGoldenResponses(t *testing.T) {
 	assertGolden(t, "maintenance_plans_list",
 		u.get(vehiclePath+"/maintenance-plans").expect(http.StatusOK))
 
+	var listedPlans struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	u.get(vehiclePath+"/maintenance-plans").expect(http.StatusOK).decode(&listedPlans)
+	if len(listedPlans.Data) == 0 {
+		t.Fatal("maintenance_plans_list has no items to snapshot individually")
+	}
+	assertGolden(t, "maintenance_plan_get",
+		u.get("/v1/maintenance-plans/"+listedPlans.Data[0].ID).expect(http.StatusOK))
+
 	// A service two years back at a lower mileage. It is the baseline of a used car
 	// (RN-03) and, more usefully here, it starts every clock far enough in the past that
 	// the due engine has something to say.
@@ -194,6 +206,8 @@ func TestGoldenResponses(t *testing.T) {
 	}).expect(http.StatusCreated)
 	assertGolden(t, "obligation_create", obligation)
 	assertGolden(t, "obligations_list", u.get(vehiclePath+"/obligations").expect(http.StatusOK))
+	assertGolden(t, "obligation_get",
+		u.get("/v1/obligations/"+obligation.id()).expect(http.StatusOK))
 
 	seguro := u.post(vehiclePath+"/seguros", map[string]any{
 		"insurer_name":    "Seguradora Teste",
@@ -208,6 +222,8 @@ func TestGoldenResponses(t *testing.T) {
 	}).expect(http.StatusCreated)
 	assertGolden(t, "seguro_create", seguro)
 	assertGolden(t, "seguros_list", u.get(vehiclePath+"/seguros").expect(http.StatusOK))
+	assertGolden(t, "seguro_get",
+		u.get("/v1/seguros/"+seguro.id()).expect(http.StatusOK))
 
 	// ---------- read models ----------
 

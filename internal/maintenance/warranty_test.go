@@ -9,7 +9,7 @@ import (
 
 func computeWarranty(months, km *int32, occurredOn time.Time, recordKm, currentKm int32, today time.Time) Warranty {
 	return ComputeWarranty(uuid.New(), uuid.New(), uuid.New(), "Bateria",
-		months, km, occurredOn, recordKm, currentKm, today)
+		months, km, occurredOn, p(recordKm), currentKm, today)
 }
 
 // The example from SPEC.md RN-05: a battery bought 20/08/2026 at 98.300 km with 24 months

@@ -38,23 +38,33 @@ WHERE o.user_id = $1
   AND v.deleted_at IS NULL
 ORDER BY v.created_at ASC;
 
--- PATCH semantics: a NULL argument leaves the column untouched. The trade-off is that an
--- optional field cannot be cleared back to NULL through this query — doing that needs an
--- explicit "clear" affordance, which nothing has asked for yet.
+-- PATCH semantics: a NULL argument leaves the column untouched. Optional columns named
+-- in `clear` are set back to NULL. brand and model are NOT NULL and are not accepted
+-- there — emptying them is not an edit, it is destroying the identity of the car.
 -- name: UpdateVehicle :one
 UPDATE vehicles
 SET brand            = COALESCE(sqlc.narg('brand'), brand),
     model            = COALESCE(sqlc.narg('model'), model),
-    version          = COALESCE(sqlc.narg('version'), version),
-    manufacture_year = COALESCE(sqlc.narg('manufacture_year'), manufacture_year),
-    model_year       = COALESCE(sqlc.narg('model_year'), model_year),
-    plate            = COALESCE(sqlc.narg('plate'), plate),
-    renavam          = COALESCE(sqlc.narg('renavam'), renavam),
-    chassis          = COALESCE(sqlc.narg('chassis'), chassis),
-    fuel_type        = COALESCE(sqlc.narg('fuel_type'), fuel_type),
-    color            = COALESCE(sqlc.narg('color'), color),
-    nickname         = COALESCE(sqlc.narg('nickname'), nickname),
-    fipe_code        = COALESCE(sqlc.narg('fipe_code'), fipe_code),
+    version          = CASE WHEN 'version' = ANY(sqlc.arg('clear')::text[]) THEN NULL
+                            ELSE COALESCE(sqlc.narg('version'), version) END,
+    manufacture_year = CASE WHEN 'manufacture_year' = ANY(sqlc.arg('clear')::text[]) THEN NULL
+                            ELSE COALESCE(sqlc.narg('manufacture_year'), manufacture_year) END,
+    model_year       = CASE WHEN 'model_year' = ANY(sqlc.arg('clear')::text[]) THEN NULL
+                            ELSE COALESCE(sqlc.narg('model_year'), model_year) END,
+    plate            = CASE WHEN 'plate' = ANY(sqlc.arg('clear')::text[]) THEN NULL
+                            ELSE COALESCE(sqlc.narg('plate'), plate) END,
+    renavam          = CASE WHEN 'renavam' = ANY(sqlc.arg('clear')::text[]) THEN NULL
+                            ELSE COALESCE(sqlc.narg('renavam'), renavam) END,
+    chassis          = CASE WHEN 'chassis' = ANY(sqlc.arg('clear')::text[]) THEN NULL
+                            ELSE COALESCE(sqlc.narg('chassis'), chassis) END,
+    fuel_type        = CASE WHEN 'fuel_type' = ANY(sqlc.arg('clear')::text[]) THEN NULL
+                            ELSE COALESCE(sqlc.narg('fuel_type'), fuel_type) END,
+    color            = CASE WHEN 'color' = ANY(sqlc.arg('clear')::text[]) THEN NULL
+                            ELSE COALESCE(sqlc.narg('color'), color) END,
+    nickname         = CASE WHEN 'nickname' = ANY(sqlc.arg('clear')::text[]) THEN NULL
+                            ELSE COALESCE(sqlc.narg('nickname'), nickname) END,
+    fipe_code        = CASE WHEN 'fipe_code' = ANY(sqlc.arg('clear')::text[]) THEN NULL
+                            ELSE COALESCE(sqlc.narg('fipe_code'), fipe_code) END,
 
     -- The three move together or not at all. They are resolved from a single
     -- catalog_model_year_id, so a partial update could not produce a brand that disagrees

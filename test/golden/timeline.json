@@ -3,6 +3,7 @@
     "data": [
       {
         "amount_cents": "null|number",
+        "care": "boolean|null",
         "id": "string",
         "kind": "string",
         "mileage_km": "number",

@@ -76,16 +76,26 @@ func (u *user) firstPlanID(vehicleID string) string {
 // firstItemID returns a maintenance catalogue item id, for building a record or a plan.
 func (u *user) firstItemID() string {
 	u.t.Helper()
+	return u.itemIDByKind("")
+}
+
+func (u *user) itemIDByKind(kind string) string {
+	u.t.Helper()
+
+	path := "/v1/maintenance-items?vehicle_type=car"
+	if kind != "" {
+		path += "&kind=" + kind
+	}
 
 	var body struct {
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	u.get("/v1/maintenance-items?vehicle_type=car").expect(http.StatusOK).decode(&body)
+	u.get(path).expect(http.StatusOK).decode(&body)
 
 	if len(body.Data) == 0 {
-		u.t.Fatal("the maintenance catalogue is empty — migration 000005 did not seed")
+		u.t.Fatalf("the maintenance catalogue has no items of kind %q", kind)
 	}
 	return body.Data[0].ID
 }

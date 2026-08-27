@@ -164,6 +164,9 @@ func protectedRoutes() []protectedRoute {
 			func(f *ownedResources) any {
 				return map[string]any{"maintenance_item_id": f.itemID}
 			}, hiddenFromStrangers},
+		{http.MethodGet, "/v1/maintenance-plans/{planID}",
+			func(f *ownedResources) string { return "/v1/maintenance-plans/" + f.planID },
+			nil, hiddenFromStrangers},
 		{http.MethodPatch, "/v1/maintenance-plans/{planID}",
 			func(f *ownedResources) string { return "/v1/maintenance-plans/" + f.planID },
 			empty, hiddenFromStrangers},
@@ -210,6 +213,9 @@ func protectedRoutes() []protectedRoute {
 					"kind": "ipva", "reference_year": 2026, "due_on": "2026-03-10",
 				}
 			}, hiddenFromStrangers},
+		{http.MethodGet, "/v1/obligations/{obligationID}",
+			func(f *ownedResources) string { return "/v1/obligations/" + f.obligationID },
+			nil, hiddenFromStrangers},
 		{http.MethodPatch, "/v1/obligations/{obligationID}",
 			func(f *ownedResources) string { return "/v1/obligations/" + f.obligationID },
 			empty, hiddenFromStrangers},
@@ -228,6 +234,9 @@ func protectedRoutes() []protectedRoute {
 					"ends_on":      "2026-12-31",
 				}
 			}, hiddenFromStrangers},
+		{http.MethodGet, "/v1/seguros/{seguroID}",
+			func(f *ownedResources) string { return "/v1/seguros/" + f.seguroID },
+			nil, hiddenFromStrangers},
 		{http.MethodPatch, "/v1/seguros/{seguroID}",
 			func(f *ownedResources) string { return "/v1/seguros/" + f.seguroID },
 			empty, hiddenFromStrangers},
@@ -362,7 +371,10 @@ func TestMalformedResourceIdsAreRejected(t *testing.T) {
 		"/v1/vehicles/not-a-uuid/dashboard",
 		"/v1/vehicles/not-a-uuid/alerts",
 		"/v1/vehicles/not-a-uuid/timeline",
+		"/v1/maintenance-plans/not-a-uuid",
 		"/v1/maintenance-records/not-a-uuid",
+		"/v1/obligations/not-a-uuid",
+		"/v1/seguros/not-a-uuid",
 	} {
 		t.Run(path, func(t *testing.T) {
 			res := u.get(path)

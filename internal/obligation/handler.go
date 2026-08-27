@@ -31,11 +31,13 @@ func (h *Handler) Mount(r chi.Router) {
 
 		r.Get("/vehicles/{vehicleID}/obligations", h.listObligations)
 		r.Post("/vehicles/{vehicleID}/obligations", h.createObligation)
+		r.Get("/obligations/{obligationID}", h.getObligation)
 		r.Patch("/obligations/{obligationID}", h.updateObligation)
 		r.Delete("/obligations/{obligationID}", h.deleteObligation)
 
 		r.Get("/vehicles/{vehicleID}/seguros", h.listSeguros)
 		r.Post("/vehicles/{vehicleID}/seguros", h.createSeguro)
+		r.Get("/seguros/{seguroID}", h.getSeguro)
 		r.Patch("/seguros/{seguroID}", h.updateSeguro)
 		r.Delete("/seguros/{seguroID}", h.deleteSeguro)
 	})
@@ -88,6 +90,22 @@ func (h *Handler) createObligation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusCreated,
+		toObligationResponse(obligation, h.service.Today()))
+}
+
+func (h *Handler) getObligation(w http.ResponseWriter, r *http.Request) {
+	userID, obligationID, err := callerAndPath(r, "obligationID")
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+
+	obligation, err := h.service.GetObligation(r.Context(), userID, obligationID)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK,
 		toObligationResponse(obligation, h.service.Today()))
 }
 
@@ -169,6 +187,21 @@ func (h *Handler) createSeguro(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusCreated, toSeguroResponse(seguro, h.service.Today()))
+}
+
+func (h *Handler) getSeguro(w http.ResponseWriter, r *http.Request) {
+	userID, seguroID, err := callerAndPath(r, "seguroID")
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+
+	seguro, err := h.service.GetSeguro(r.Context(), userID, seguroID)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toSeguroResponse(seguro, h.service.Today()))
 }
 
 func (h *Handler) updateSeguro(w http.ResponseWriter, r *http.Request) {

@@ -60,7 +60,7 @@ type CreateMaintenanceRecordParams struct {
 	ID               uuid.UUID
 	VehicleID        uuid.UUID
 	OccurredOn       time.Time
-	MileageKm        int32
+	MileageKm        *int32
 	Kind             string
 	WorkshopName     *string
 	TotalCostCents   int64
@@ -232,7 +232,7 @@ type ListLastPerformedByItemRow struct {
 	MaintenanceItemID uuid.UUID
 	RecordID          uuid.UUID
 	OccurredOn        time.Time
-	MileageKm         int32
+	MileageKm         *int32
 }
 
 // The baseline for every plan on a vehicle: the most recent record naming each item.
@@ -416,7 +416,7 @@ type ListWarrantiesForVehicleRow struct {
 	ItemName          string
 	RecordID          uuid.UUID
 	RecordOccurredOn  time.Time
-	RecordMileageKm   int32
+	RecordMileageKm   *int32
 }
 
 // Every line item that carries a warranty, with the record's date and mileage so the

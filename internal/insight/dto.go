@@ -154,6 +154,7 @@ type timelineEntry struct {
 	Subtitle    *string `json:"subtitle"`
 	AmountCents *int64  `json:"amount_cents"`
 	MileageKm   *int32  `json:"mileage_km"`
+	Care        *bool   `json:"care"`
 }
 
 func toTimelineEntry(row db.ListVehicleTimelineRow) timelineEntry {
@@ -165,6 +166,7 @@ func toTimelineEntry(row db.ListVehicleTimelineRow) timelineEntry {
 		Subtitle:    row.Subtitle,
 		AmountCents: row.AmountCents,
 		MileageKm:   row.MileageKm,
+		Care:        row.Care,
 	}
 }
 

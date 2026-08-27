@@ -97,6 +97,10 @@ func (s *Service) ListObligations(ctx context.Context, userID, vehicleID uuid.UU
 	return obligations, nil
 }
 
+func (s *Service) GetObligation(ctx context.Context, userID, obligationID uuid.UUID) (db.VehicleObligation, error) {
+	return s.authorizeObligation(ctx, userID, obligationID)
+}
+
 func (s *Service) UpdateObligation(ctx context.Context, userID, obligationID uuid.UUID, req updateObligationRequest) (db.VehicleObligation, error) {
 	if _, err := s.authorizeObligation(ctx, userID, obligationID); err != nil {
 		return db.VehicleObligation{}, err
@@ -186,6 +190,10 @@ func (s *Service) ListSeguros(ctx context.Context, userID, vehicleID uuid.UUID) 
 		return nil, apperr.Internal(err)
 	}
 	return seguros, nil
+}
+
+func (s *Service) GetSeguro(ctx context.Context, userID, seguroID uuid.UUID) (db.Seguro, error) {
+	return s.authorizeSeguro(ctx, userID, seguroID)
 }
 
 func (s *Service) UpdateSeguro(ctx context.Context, userID, seguroID uuid.UUID, req updateSeguroRequest) (db.Seguro, error) {

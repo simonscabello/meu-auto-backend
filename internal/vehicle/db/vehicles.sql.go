@@ -272,33 +272,44 @@ const updateVehicle = `-- name: UpdateVehicle :one
 UPDATE vehicles
 SET brand            = COALESCE($1, brand),
     model            = COALESCE($2, model),
-    version          = COALESCE($3, version),
-    manufacture_year = COALESCE($4, manufacture_year),
-    model_year       = COALESCE($5, model_year),
-    plate            = COALESCE($6, plate),
-    renavam          = COALESCE($7, renavam),
-    chassis          = COALESCE($8, chassis),
-    fuel_type        = COALESCE($9, fuel_type),
-    color            = COALESCE($10, color),
-    nickname         = COALESCE($11, nickname),
-    fipe_code        = COALESCE($12, fipe_code),
+    version          = CASE WHEN 'version' = ANY($3::text[]) THEN NULL
+                            ELSE COALESCE($4, version) END,
+    manufacture_year = CASE WHEN 'manufacture_year' = ANY($3::text[]) THEN NULL
+                            ELSE COALESCE($5, manufacture_year) END,
+    model_year       = CASE WHEN 'model_year' = ANY($3::text[]) THEN NULL
+                            ELSE COALESCE($6, model_year) END,
+    plate            = CASE WHEN 'plate' = ANY($3::text[]) THEN NULL
+                            ELSE COALESCE($7, plate) END,
+    renavam          = CASE WHEN 'renavam' = ANY($3::text[]) THEN NULL
+                            ELSE COALESCE($8, renavam) END,
+    chassis          = CASE WHEN 'chassis' = ANY($3::text[]) THEN NULL
+                            ELSE COALESCE($9, chassis) END,
+    fuel_type        = CASE WHEN 'fuel_type' = ANY($3::text[]) THEN NULL
+                            ELSE COALESCE($10, fuel_type) END,
+    color            = CASE WHEN 'color' = ANY($3::text[]) THEN NULL
+                            ELSE COALESCE($11, color) END,
+    nickname         = CASE WHEN 'nickname' = ANY($3::text[]) THEN NULL
+                            ELSE COALESCE($12, nickname) END,
+    fipe_code        = CASE WHEN 'fipe_code' = ANY($3::text[]) THEN NULL
+                            ELSE COALESCE($13, fipe_code) END,
 
     -- The three move together or not at all. They are resolved from a single
     -- catalog_model_year_id, so a partial update could not produce a brand that disagrees
     -- with its model — but writing them as one group is what keeps that true if somebody
     -- later adds a second way in.
-    catalog_brand_id      = COALESCE($13, catalog_brand_id),
-    catalog_model_id      = COALESCE($14, catalog_model_id),
-    catalog_model_year_id = COALESCE($15, catalog_model_year_id),
+    catalog_brand_id      = COALESCE($14, catalog_brand_id),
+    catalog_model_id      = COALESCE($15, catalog_model_id),
+    catalog_model_year_id = COALESCE($16, catalog_model_year_id),
 
     updated_at       = now()
-WHERE id = $16 AND deleted_at IS NULL
+WHERE id = $17 AND deleted_at IS NULL
 RETURNING vehicle_type, id, brand, model, version, manufacture_year, model_year, plate, renavam, chassis, fuel_type, color, nickname, fipe_code, current_mileage_km, current_mileage_at, created_at, updated_at, deleted_at, catalog_brand_id, catalog_model_id, catalog_model_year_id
 `
 
 type UpdateVehicleParams struct {
 	Brand              *string
 	Model              *string
+	Clear              []string
 	Version            *string
 	ManufactureYear    *int32
 	ModelYear          *int32
@@ -315,13 +326,14 @@ type UpdateVehicleParams struct {
 	ID                 uuid.UUID
 }
 
-// PATCH semantics: a NULL argument leaves the column untouched. The trade-off is that an
-// optional field cannot be cleared back to NULL through this query — doing that needs an
-// explicit "clear" affordance, which nothing has asked for yet.
+// PATCH semantics: a NULL argument leaves the column untouched. Optional columns named
+// in `clear` are set back to NULL. brand and model are NOT NULL and are not accepted
+// there — emptying them is not an edit, it is destroying the identity of the car.
 func (q *Queries) UpdateVehicle(ctx context.Context, arg UpdateVehicleParams) (Vehicle, error) {
 	row := q.db.QueryRow(ctx, updateVehicle,
 		arg.Brand,
 		arg.Model,
+		arg.Clear,
 		arg.Version,
 		arg.ManufactureYear,
 		arg.ModelYear,

@@ -337,9 +337,9 @@ func (r *Repository) DeactivatePlan(ctx context.Context, planID uuid.UUID) error
 
 // ---------- records ----------
 
-// CreateRecord writes the record, its line items and the odometer reading it implies,
-// atomically (SPEC.md RN-01: every event carrying a mileage produces a reading in the same
-// transaction).
+// CreateRecord writes the record and its line items atomically. When the record asserts
+// a mileage, the odometer reading it implies is written in the same transaction
+// (SPEC.md RN-01). A care-only record may omit mileage and then produces no reading.
 func (r *Repository) CreateRecord(
 	ctx context.Context,
 	params db.CreateMaintenanceRecordParams,
@@ -371,14 +371,16 @@ func (r *Repository) CreateRecord(
 			}
 		}
 
-		if err := q.CreateMaintenanceOdometerReading(ctx, db.CreateMaintenanceOdometerReadingParams{
-			VehicleID:           inserted.VehicleID,
-			MileageKm:           inserted.MileageKm,
-			OccurredOn:          inserted.OccurredOn,
-			RecordedByUserID:    inserted.RecordedByUserID,
-			SourceMaintenanceID: &inserted.ID,
-		}); err != nil {
-			return fmt.Errorf("create odometer reading from maintenance: %w", err)
+		if inserted.MileageKm != nil {
+			if err := q.CreateMaintenanceOdometerReading(ctx, db.CreateMaintenanceOdometerReadingParams{
+				VehicleID:           inserted.VehicleID,
+				MileageKm:           *inserted.MileageKm,
+				OccurredOn:          inserted.OccurredOn,
+				RecordedByUserID:    inserted.RecordedByUserID,
+				SourceMaintenanceID: &inserted.ID,
+			}); err != nil {
+				return fmt.Errorf("create odometer reading from maintenance: %w", err)
+			}
 		}
 
 		record, created = inserted, true
@@ -436,13 +438,16 @@ func (r *Repository) UpdateRecord(ctx context.Context, params db.UpdateMaintenan
 		}
 
 		// Changing the date or the mileage must move the reading too, or the odometer log
-		// would keep asserting a number the record no longer claims.
-		if err := q.UpdateMaintenanceOdometerReading(ctx, db.UpdateMaintenanceOdometerReadingParams{
-			SourceMaintenanceID: &updated.ID,
-			MileageKm:           updated.MileageKm,
-			OccurredOn:          updated.OccurredOn,
-		}); err != nil {
-			return fmt.Errorf("update odometer reading from maintenance: %w", err)
+		// would keep asserting a number the record no longer claims. A care record with
+		// no mileage produced no reading, so there is nothing to move.
+		if updated.MileageKm != nil {
+			if err := q.UpdateMaintenanceOdometerReading(ctx, db.UpdateMaintenanceOdometerReadingParams{
+				SourceMaintenanceID: &updated.ID,
+				MileageKm:           *updated.MileageKm,
+				OccurredOn:          updated.OccurredOn,
+			}); err != nil {
+				return fmt.Errorf("update odometer reading from maintenance: %w", err)
+			}
 		}
 
 		record = updated

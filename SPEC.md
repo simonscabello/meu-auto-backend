@@ -90,6 +90,9 @@ Consequências:
   forjar uma leitura que se diz originada de uma manutenção.
 - **Todo evento que informa km gera uma `odometer_reading`** na mesma transação, com
   `source` e FK tipada `ON DELETE CASCADE`. Apagou a manutenção, a leitura some junto.
+  **Exceção:** um registro cujas linhas são todas `kind = care` pode omitir `mileage_km`.
+  Sem km não há leitura: o hábito tem data, não odômetro. Inventar a quilometragem em
+  cache fabricaria um fato (RN-03).
 
 ### RN-02 — Motor de vencimento (o coração do produto)
 
@@ -117,6 +120,11 @@ para cada plano ativo do veículo:
 - **Semântica "OU" confirmada:** basta um dos limites ser atingido. O status é o **pior**
   entre a avaliação por km e a avaliação por tempo.
 - Quando só um dos intervalos está definido, o outro simplesmente não participa.
+- **Último registro sem `mileage_km`:** a dimensão de distância daquele plano não é
+  avaliada — `due_at_km` e `remaining_km` ficam nulos e o status por distância permanece
+  `em_dia` (neutro), exatamente como um plano sem `interval_km`. A guarda existe porque o
+  dono pode acrescentar `interval_km` a um plano de cuidado; sem ela o cálculo usaria
+  zero. Um cuidado sem km é `interval_days` puro.
 - **Três dimensões de intervalo, não duas:** `interval_km`, `interval_months` e
   `interval_days`. `interval_days` foi adicionado na implementação porque um hábito é "a
   cada 15 dias" e uma revisão é "a cada 12 meses" — expressar um na unidade do outro está
@@ -142,6 +150,18 @@ Não existem campos `last_performed_*` no plano. O usuário registra um
 `maintenance_record` com `kind = 'declared'` (sem oficina, sem valor obrigatório).
 
 **Um único caminho de cálculo**, e o histórico já nasce preenchido.
+
+Um registro afirma data e quilometragem. Quem não tem as duas não deve gravá-las mesmo
+assim. A exceção estrutural é o cuidado (`maintenance_items.kind = 'care'`): calibrar
+pneu não produz km, então `maintenance_records.mileage_km` é nulável **somente** quando
+todas as linhas do registro são `care`. Qualquer linha `maintenance` continua exigindo
+km. Sem km, não se cria `odometer_reading` e o motor ignora a dimensão de distância.
+
+**Nulidade consciente (D-01).** `mileage_km` deixa de ser sempre presente na resposta.
+Um app antigo que faça `json['mileage_km'] as int` lança quando o valor é nulo. A janela
+é segura enquanto só o app publicado grava registros — ele sempre manda km. O nulo só
+aparece depois que o cliente que omite km (Fase 7 do app) for publicado. Campo novo
+`care` na timeline; `kind` permanece `manutencao`.
 
 ### RN-04 — O dinheiro mora no evento que o gerou
 
@@ -386,7 +406,8 @@ O `vehicles` ganha `catalog_brand_id`, `catalog_model_id`, `catalog_model_year_i
   `interval_km` (nullable), `interval_months` (nullable), `alert_km`, `alert_days`,
   `origin` (`suggested` | `user`), `is_active`.
   Único por `(vehicle_id, maintenance_item_id)`.
-- **`maintenance_records`** — o **fato**. `vehicle_id`, `occurred_on`, `mileage_km`,
+- **`maintenance_records`** — o **fato**. `vehicle_id`, `occurred_on`, `mileage_km`
+  (nullable quando todas as linhas são `care`),
   `kind` (`performed` | `declared`), `workshop_name`, `total_cost_cents`, `notes`,
   `recorded_by_user_id`, `deleted_at`.
 - **`maintenance_record_items`** — as **linhas**. `maintenance_record_id`,
@@ -453,8 +474,8 @@ users ──< vehicle_ownerships >── vehicles ──┬── odometer_readi
 | **MaintenancePlan** | `maintenance_plans` | — | referencia um item do catálogo ativo para o `vehicle_type` |
 | **User** | `users` | tokens | — |
 
-Escrita de manutenção = **uma transação**: `record` + `items` + `odometer_reading` +
-recálculo do cache de km do veículo.
+Escrita de manutenção = **uma transação**: `record` + `items` + (se houver km)
+`odometer_reading` + recálculo do cache de km do veículo.
 
 ---
 
@@ -705,6 +726,13 @@ mais importante do backend.
 - **Valor novo em enum quebra app antigo.** O app trata desconhecido como default;
   o backend nunca renomeia nem reaproveita um valor de enum.
 
+**Nulidade em campo existente.** Tornar `mileage_km` nulável na resposta de um
+`maintenance_record` é uma mudança de contrato (um `as int` no cliente lança). Foi
+feita mesmo assim, documentada na RN-03, porque o nulo só é produzido depois que o
+cliente que omite km estiver publicado. Até lá, o app instalado continua mandando km
+e nunca recebe nulo. Campo novo `care` na timeline é aditivo; `kind` permanece
+`manutencao`.
+
 ### D-02 — DTO explícito por versão, nunca struct do sqlc no JSON
 
 Se o DTO da API for o struct gerado do banco, toda migration vira potencialmente um
@@ -716,18 +744,25 @@ breaking change silencioso do contrato. Mapeamento manual em `dto.go` por módul
 Resolve a decisão que o `CLAUDE.md` do app deixou explicitamente em aberto.
 
 `api/openapi.yaml` versionado no repo do backend é a **fonte única do contrato**.
-O app gera o client Dart a partir dele.
+Os modelos Dart no app são escritos à mão, sem `build_runner`, sem `json_serializable`,
+sem `openapi-generator`. O contrato exige que enum desconhecido caia em default seguro
+em vez de lançar — um servidor que passe a devolver `fuel_type: "hidrogenio"` não pode
+quebrar um app publicado. Em `json_serializable` isso é opt-in por enum (`unknownEnumValue`),
+fácil de esquecer.
+
+A compensação é `test/contract/openapi_paths_test.dart` no repositório do app, que lê
+este `openapi.yaml` e falha se o app referenciar rota inexistente. Deste lado,
+`TestRouterAndOpenAPIAgree` falha se o router e o spec divergirem.
 
 **Por que escrito à mão e não gerado do código Go:** o spec é o contrato e o código o
 implementa. Se o spec for gerado do código, qualquer refatoração vira mudança de
 contrato sem ninguém perceber.
 
-**Estado:** escrito e válido (`redocly lint`), cobrindo os 41 endpoints. Todo endpoint tem
-`operationId` — é dele que sai o nome do método no client Dart; sem ele o gerador deriva do
-path e o nome muda junto com a rota.
+**Estado:** escrito e válido (`redocly lint`). Todo endpoint tem `operationId`.
 
-**OpenAPI 3.0.3, não 3.1**, por causa do consumidor: o `openapi-generator` lida bem com
-`nullable: true` do 3.0 e mal com `type: [string, "null"]` do 3.1.
+**OpenAPI 3.0.3, não 3.1**, porque `nullable: true` do 3.0 é o que o contrato já usa, e o
+app trata enum desconhecido como default seguro — um gerador que falha nesse valor
+quebraria versões publicadas.
 
 ⚠️ **Falta o guarda automático.** O spec foi conferido campo a campo contra respostas reais
 da API uma vez, na Fase 5 — todos os schemas batem. Mas nada impede a divergência amanhã.

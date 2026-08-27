@@ -6,9 +6,11 @@
 # o spec fosse gerado do código, qualquer refatoração viraria mudança de contrato sem
 # ninguém perceber.
 #
-# OpenAPI 3.0.3, e não 3.1, por causa do consumidor: o app Flutter gera o client Dart daqui
-# com openapi-generator, que lida bem com `nullable: true` do 3.0 e mal com o
-# `type: [string, "null"]` do 3.1.
+# OpenAPI 3.0.3, e não 3.1: `nullable: true` do 3.0 é o que o contrato já usa, e o app
+# trata enum desconhecido como default seguro — um gerador que falha nesse valor quebraria
+# versões publicadas. Os modelos Dart são escritos à mão; a compensação é
+# `test/contract/openapi_paths_test.dart` no repositório do app, que lê este arquivo e
+# falha se o app referenciar rota inexistente.
 #
 # ------------------------------------------------------------------------------------
 # COMPATIBILIDADE (SPEC.md D-01) — leia antes de editar
@@ -740,6 +742,25 @@ paths:
         in: path
         required: true
         schema: { type: string, format: uuid }
+    get:
+      operationId: getMaintenancePlan
+      tags: [manutencao]
+      summary: Ver plano
+      description: |
+        O mesmo shape de um item da listagem, com o vencimento já calculado (`status`,
+        `due_on`, `due_at_km`, `remaining_days`, `remaining_km`).
+
+        Um plano com `strategy: not_applicable` é retornável por id — um deep link antigo
+        não pode quebrar, e a tela de perfil precisa dele. A listagem continua omitindo
+        esses planos a menos que `include_not_applicable=true`.
+      responses:
+        "200":
+          description: O plano, com o vencimento já calculado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenancePlan" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
     patch:
       operationId: updateMaintenancePlan
       tags: [manutencao]
@@ -866,7 +887,8 @@ paths:
         Use o item `personalizada` do catálogo para o que não tem nome.
 
         A quilometragem informada gera uma leitura de odômetro e passa pela mesma validação
-        de consistência do endpoint de odômetro.
+        de consistência do endpoint de odômetro. Envie `source: "correction"` para pular
+        essa checagem — a leitura gerada continua com `source = maintenance`.
       requestBody:
         required: true
         content:
@@ -919,7 +941,8 @@ paths:
         item** — trocar item a item exige decidir o que acontece com o relógio dos removidos.
 
         Mudar data ou quilometragem move a leitura de odômetro gerada por este registro, e
-        passa pela mesma validação de consistência.
+        passa pela mesma validação de consistência. Envie `source: "correction"` para pular
+        essa checagem — a leitura continua com `source = maintenance`.
       requestBody:
         required: true
         content:
@@ -1001,6 +1024,19 @@ paths:
         in: path
         required: true
         schema: { type: string, format: uuid }
+    get:
+      operationId: getObligation
+      tags: [prazos]
+      summary: Ver débito
+      description: O mesmo shape de um item da listagem, com `status` e `remaining_days` já calculados.
+      responses:
+        "200":
+          description: O débito
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Obligation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
     patch:
       operationId: updateObligation
       tags: [prazos]
@@ -1078,6 +1114,19 @@ paths:
         in: path
         required: true
         schema: { type: string, format: uuid }
+    get:
+      operationId: getSeguro
+      tags: [prazos]
+      summary: Ver apólice
+      description: O mesmo shape de um item da listagem, com `status` e `remaining_days` já calculados.
+      responses:
+        "200":
+          description: A apólice
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Seguro" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
     patch:
       operationId: updateSeguro
       tags: [prazos]
@@ -1566,7 +1615,9 @@ components:
 
     UpdateVehicleRequest:
       type: object
-      description: Campo ausente permanece como está.
+      description: |
+        Campo ausente permanece como está. `null` num campo também significa "não altere"
+        (o servidor usa COALESCE). Para voltar um opcional a `null`, nomeie-o em `clear`.
       properties:
         brand: { type: string, nullable: true, maxLength: 120 }
         model: { type: string, nullable: true, maxLength: 120 }
@@ -1585,9 +1636,32 @@ components:
           nullable: true
           description: |
             Revincula o veículo a outra entrada do catálogo — "escolhi a versão errada".
-            Ausente mantém o vínculo atual; não há como desfazê-lo por aqui, pelo mesmo
-            motivo que nenhum opcional pode ser limpo neste PATCH.
+            Ausente mantém o vínculo atual. Não há como desfazê-lo por `clear`: desvincular
+            não é o mesmo que esvaziar um campo de retrato.
         fipe_code: { type: string, nullable: true, maxLength: 120 }
+        clear:
+          type: array
+          items:
+            type: string
+            enum:
+              - nickname
+              - plate
+              - color
+              - renavam
+              - chassis
+              - version
+              - fuel_type
+              - fipe_code
+              - manufacture_year
+              - model_year
+          description: |
+            Campos opcionais a voltar para `null`. `brand` e `model` não entram — são
+            NOT NULL. Um campo em `clear` e presente com valor no mesmo request é
+            `validation_failed`. Valor desconhecido no array também, em `details.fields.clear`.
+
+            Limpar `fuel_type` reconcilia os planos pelo mesmo caminho de uma troca de
+            combustível. Se o powertrain ficar desconhecido, a RN-11 vale: desconhecido
+            não apaga nada.
 
     Vehicle:
       type: object
@@ -2049,7 +2123,7 @@ components:
 
     CreateMaintenanceRecordRequest:
       type: object
-      required: [mileage_km, items]
+      required: [items]
       properties:
         id: { type: string, format: uuid, nullable: true }
         occurred_on:
@@ -2057,11 +2131,27 @@ components:
           format: date
           nullable: true
           description: Padrão é hoje. Não pode estar no futuro.
-        mileage_km: { type: integer, format: int32, minimum: 0 }
+        mileage_km:
+          type: integer
+          format: int32
+          minimum: 0
+          nullable: true
+          description: |
+            Obrigatório se qualquer linha for `kind = maintenance`. Pode ser omitido
+            quando **todas** as linhas são `kind = care` — calibrar pneu não produz
+            quilometragem, e inventar uma a partir do cache viola RN-03.
         kind: { $ref: "#/components/schemas/MaintenanceRecordKind" }
         workshop_name: { type: string, nullable: true, maxLength: 120 }
         total_cost_cents: { type: integer, format: int64, nullable: true, minimum: 0 }
         notes: { type: string, nullable: true, maxLength: 500 }
+        source:
+          type: string
+          enum: [manual, correction]
+          description: |
+            Instrução de validação, não a origem gravada na leitura de odômetro. Ausente
+            equivale a `manual`. `correction` ignora a checagem de vizinhos (RN-01).
+            `maintenance` e `abastecimento` são recusados — são escritos pelos módulos que
+            os originam. A leitura gerada pelo registro continua com `source = maintenance`.
         items:
           type: array
           minItems: 1
@@ -2079,6 +2169,14 @@ components:
         workshop_name: { type: string, nullable: true }
         total_cost_cents: { type: integer, format: int64, nullable: true, minimum: 0 }
         notes: { type: string, nullable: true }
+        source:
+          type: string
+          enum: [manual, correction]
+          description: |
+            Instrução de validação, não a origem gravada na leitura de odômetro. Ausente
+            equivale a `manual`. `correction` ignora a checagem de vizinhos (RN-01).
+            `maintenance` e `abastecimento` são recusados. A leitura deste registro
+            continua com `source = maintenance`.
 
     MaintenanceRecordItem:
       type: object
@@ -2114,7 +2212,15 @@ components:
         id: { type: string, format: uuid }
         vehicle_id: { type: string, format: uuid }
         occurred_on: { type: string, format: date }
-        mileage_km: { type: integer, format: int32 }
+        mileage_km:
+          type: integer
+          format: int32
+          nullable: true
+          description: |
+            `null` num registro só de cuidados (`kind = care` em todas as linhas). Um app
+            antigo que faça `json['mileage_km'] as int` lança nesse caso. A janela é
+            segura enquanto só o app publicado grava registros — ele sempre manda km.
+            O nulo só aparece depois que o cliente que omite km for publicado.
         kind: { $ref: "#/components/schemas/MaintenanceRecordKind" }
         workshop_name: { type: string, nullable: true }
         total_cost_cents: { type: integer, format: int64 }
@@ -2380,7 +2486,16 @@ components:
           type: integer
           format: int32
           nullable: true
-          description: '`null` num pagamento de tributo — não envolve quilometragem.'
+          description: |
+            `null` num pagamento de tributo — não envolve quilometragem — e num registro
+            de cuidado sem km.
+        care:
+          type: boolean
+          nullable: true
+          description: |
+            `true` quando **todas** as linhas do registro são `kind = care`. `false` numa
+            manutenção. `null` nos demais tipos da timeline. `kind` continua `manutencao`
+            — um valor novo no enum faria um app publicado cair no fallback.
 
     TimelinePage:
       type: object

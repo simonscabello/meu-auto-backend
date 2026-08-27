@@ -58,6 +58,9 @@ const (
 	// RecordKindDeclared is the owner asserting from memory — a used car bought with
 	// "last oil change at 95.000 km" and no receipt (SPEC.md RN-03).
 	RecordKindDeclared = "declared"
+
+	recordSourceManual     = "manual"
+	recordSourceCorrection = "correction"
 )
 
 const (
@@ -283,13 +286,19 @@ type createRecordRequest struct {
 	ID string `json:"id"`
 
 	OccurredOn     *string `json:"occurred_on"`
-	MileageKm      int32   `json:"mileage_km"`
+	MileageKm      *int32  `json:"mileage_km"`
 	Kind           string  `json:"kind"`
 	WorkshopName   *string `json:"workshop_name"`
 	TotalCostCents *int64  `json:"total_cost_cents"`
 	Notes          *string `json:"notes"`
 
 	Items []recordItemRequest `json:"items"`
+
+	// Source is a validation instruction, not the value persisted on the odometer
+	// reading this record produces. That reading is always written with
+	// source = 'maintenance' and source_maintenance_id set. "correction" only skips
+	// CheckOdometerConsistency, the same way POST /odometer does.
+	Source string `json:"source"`
 
 	occurredOn time.Time
 }
@@ -299,7 +308,7 @@ func (r *createRecordRequest) normalizeAndValidate(today time.Time) error {
 
 	r.occurredOn = parseOccurredOn(errs, r.OccurredOn, today)
 
-	if r.MileageKm < 0 || r.MileageKm > maxMileageKm {
+	if r.MileageKm != nil && (*r.MileageKm < 0 || *r.MileageKm > maxMileageKm) {
 		errs.Add("mileage_km", "Quilometragem inválida.")
 	}
 
@@ -309,6 +318,8 @@ func (r *createRecordRequest) normalizeAndValidate(today time.Time) error {
 	if r.Kind != RecordKindPerformed && r.Kind != RecordKindDeclared {
 		errs.Add("kind", "Tipo inválido. Use performed ou declared.")
 	}
+
+	validateRecordSource(errs, &r.Source)
 
 	r.WorkshopName = trimOptional(r.WorkshopName)
 	if r.WorkshopName != nil && len(*r.WorkshopName) > maxTextLength {
@@ -364,12 +375,36 @@ func (r *createRecordRequest) normalizeAndValidate(today time.Time) error {
 	return errs.Err("Não foi possível registrar a manutenção.")
 }
 
+// recordRequiresMileage reports whether any resolved catalogue kind is a service
+// (kind = maintenance). A care-only record may omit mileage; a mixed one may not.
+func recordRequiresMileage(itemKinds []string) bool {
+	for _, kind := range itemKinds {
+		if kind != KindCare {
+			return true
+		}
+	}
+	return false
+}
+
+func errIfMileageMissing(mileageKm *int32, itemKinds []string) error {
+	if mileageKm != nil || !recordRequiresMileage(itemKinds) {
+		return nil
+	}
+	errs := validate.New()
+	errs.Add("mileage_km", "Informe a quilometragem.")
+	return errs.Err("Não foi possível registrar a manutenção.")
+}
+
 type updateRecordRequest struct {
 	OccurredOn     *string `json:"occurred_on"`
 	MileageKm      *int32  `json:"mileage_km"`
 	WorkshopName   *string `json:"workshop_name"`
 	TotalCostCents *int64  `json:"total_cost_cents"`
 	Notes          *string `json:"notes"`
+
+	// Source is a validation instruction, not the value persisted on the odometer
+	// reading this record produced. See createRecordRequest.Source.
+	Source string `json:"source"`
 
 	occurredOn *time.Time
 }
@@ -395,7 +430,20 @@ func (r *updateRecordRequest) normalizeAndValidate(today time.Time) error {
 		errs.Add("total_cost_cents", "Valor inválido.")
 	}
 
+	validateRecordSource(errs, &r.Source)
+
 	return errs.Err("Não foi possível atualizar o registro.")
+}
+
+func validateRecordSource(errs validate.Errors, source *string) {
+	switch *source {
+	case "":
+		*source = recordSourceManual
+	case recordSourceManual, recordSourceCorrection:
+		return
+	default:
+		errs.Add("source", "Origem inválida. Use manual ou correction.")
+	}
 }
 
 // ---------- shared validation ----------
@@ -608,7 +656,7 @@ func toPlanResponse(due Due) planResponse {
 	}
 	if due.Last != nil {
 		out.LastOccurredOn = civil.FormatPtr(&due.Last.OccurredOn)
-		out.LastMileageKm = &due.Last.MileageKm
+		out.LastMileageKm = due.Last.MileageKm
 	}
 	return out
 }
@@ -711,7 +759,7 @@ type recordResponse struct {
 	VehicleID string `json:"vehicle_id"`
 
 	OccurredOn     string  `json:"occurred_on"`
-	MileageKm      int32   `json:"mileage_km"`
+	MileageKm      *int32  `json:"mileage_km"`
 	Kind           string  `json:"kind"`
 	WorkshopName   *string `json:"workshop_name"`
 	TotalCostCents int64   `json:"total_cost_cents"`
@@ -754,8 +802,8 @@ func toRecordResponse(r db.MaintenanceRecord, items []db.ListMaintenanceRecordIt
 			until := civil.AddMonths(r.OccurredOn, int(*item.WarrantyMonths))
 			line.WarrantyUntil = civil.FormatPtr(&until)
 		}
-		if item.WarrantyKm != nil {
-			untilKm := r.MileageKm + *item.WarrantyKm
+		if item.WarrantyKm != nil && r.MileageKm != nil {
+			untilKm := *r.MileageKm + *item.WarrantyKm
 			line.WarrantyUntilKm = &untilKm
 		}
 		out.Items = append(out.Items, line)

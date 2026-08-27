@@ -30,7 +30,11 @@ func plan(intervalKm, intervalMonths, intervalDays *int32) Plan {
 }
 
 func performed(occurredOn time.Time, mileageKm int32) *Performed {
-	return &Performed{RecordID: uuid.New(), OccurredOn: occurredOn, MileageKm: mileageKm}
+	return &Performed{RecordID: uuid.New(), OccurredOn: occurredOn, MileageKm: p(mileageKm)}
+}
+
+func performedWithoutKm(occurredOn time.Time) *Performed {
+	return &Performed{RecordID: uuid.New(), OccurredOn: occurredOn}
 }
 
 // The worked example from SPEC.md RN-02, end to end.
@@ -263,10 +267,10 @@ func TestComputeAllOrdersByUrgency(t *testing.T) {
 	noInterval.ItemName = "Sem periodicidade"
 
 	lastByItem := map[uuid.UUID]Performed{
-		overdue.ItemID:    {OccurredOn: date(2026, time.January, 10), MileageKm: 90000},
-		dueSoon.ItemID:    {OccurredOn: date(2026, time.February, 25), MileageKm: 90000},
-		onTrack.ItemID:    {OccurredOn: date(2026, time.January, 10), MileageKm: 90000},
-		noInterval.ItemID: {OccurredOn: date(2026, time.January, 10), MileageKm: 90000},
+		overdue.ItemID:    {OccurredOn: date(2026, time.January, 10), MileageKm: p(int32(90000))},
+		dueSoon.ItemID:    {OccurredOn: date(2026, time.February, 25), MileageKm: p(int32(90000))},
+		onTrack.ItemID:    {OccurredOn: date(2026, time.January, 10), MileageKm: p(int32(90000))},
+		noInterval.ItemID: {OccurredOn: date(2026, time.January, 10), MileageKm: p(int32(90000))},
 		// noBaseline deliberately absent.
 	}
 
@@ -302,7 +306,7 @@ func TestComputeAllMatchesBaselineByItem(t *testing.T) {
 
 	// Only the oil was done, at 95.000 km, inside some larger service.
 	lastByItem := map[uuid.UUID]Performed{
-		oil.ItemID: {OccurredOn: date(2026, time.June, 1), MileageKm: 95000},
+		oil.ItemID: {OccurredOn: date(2026, time.June, 1), MileageKm: p(int32(95000))},
 	}
 
 	got := ComputeAll([]Plan{oil, filter}, lastByItem, 96000, date(2026, time.August, 21))
@@ -342,9 +346,9 @@ func TestComputeAllBreaksTiesByUrgency(t *testing.T) {
 	byDistance.ItemName = "Vencido por km"
 
 	lastByItem := map[uuid.UUID]Performed{
-		slightly.ItemID:   {OccurredOn: date(2026, time.February, 10), MileageKm: 90000},
-		badly.ItemID:      {OccurredOn: date(2026, time.January, 1), MileageKm: 90000},
-		byDistance.ItemID: {OccurredOn: date(2026, time.June, 1), MileageKm: 90000},
+		slightly.ItemID:   {OccurredOn: date(2026, time.February, 10), MileageKm: p(int32(90000))},
+		badly.ItemID:      {OccurredOn: date(2026, time.January, 1), MileageKm: p(int32(90000))},
+		byDistance.ItemID: {OccurredOn: date(2026, time.June, 1), MileageKm: p(int32(90000))},
 	}
 
 	got := ComputeAll([]Plan{slightly, byDistance, badly}, lastByItem, 105000, today)
@@ -392,5 +396,48 @@ func TestComputeAllHandlesNoPlans(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("len = %d, want 0", len(got))
+	}
+}
+
+// A care record may assert a date without a mileage. If the owner later puts interval_km
+// on that plan, the distance dimension must not be measured from garbage (zero).
+func TestDistanceDimensionSkippedWhenLastHasNoMileage(t *testing.T) {
+	t.Parallel()
+
+	both := plan(p(int32(10000)), p(int32(12)), nil)
+	last := performedWithoutKm(date(2026, time.January, 10))
+
+	// 200.000 km would blow a 10.000 km interval measured from zero. Time is comfortable
+	// (due 2027-01-10). Distance must not vote.
+	due := ComputeDue(both, last, 200000, date(2026, time.August, 21))
+
+	if due.DueAtKm != nil || due.RemainingKm != nil {
+		t.Errorf("DueAtKm/RemainingKm = %v/%v, want nil", due.DueAtKm, due.RemainingKm)
+	}
+	if due.Status != StatusOnTrack {
+		t.Errorf("Status = %q, want %q (time is comfortable, distance must not vote)",
+			due.Status, StatusOnTrack)
+	}
+	if due.DueOn == nil || !due.DueOn.Equal(date(2027, time.January, 10)) {
+		t.Errorf("DueOn = %v, want 2027-01-10", due.DueOn)
+	}
+}
+
+func TestDistanceOnlyPlanWithNoMileageDoesNotFallDue(t *testing.T) {
+	t.Parallel()
+
+	due := ComputeDue(
+		plan(p(int32(10000)), nil, nil),
+		performedWithoutKm(date(2026, time.January, 10)),
+		999999,
+		date(2026, time.August, 21),
+	)
+
+	if due.Status != StatusOnTrack {
+		t.Errorf("Status = %q, want %q — no km to compare, so distance stays neutral",
+			due.Status, StatusOnTrack)
+	}
+	if due.DueAtKm != nil || due.RemainingKm != nil {
+		t.Error("a record without mileage produced a distance due point")
 	}
 }

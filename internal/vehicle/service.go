@@ -257,6 +257,7 @@ func (s *Service) Update(ctx context.Context, userID, vehicleID uuid.UUID, req u
 		CatalogBrandID:     selection.brandID,
 		CatalogModelID:     selection.modelID,
 		CatalogModelYearID: selection.modelYearID,
+		Clear:              clearColumns(req.Clear),
 	})
 	switch {
 	case errors.Is(err, ErrVehicleNotFound):
@@ -280,6 +281,13 @@ func (s *Service) Update(ctx context.Context, userID, vehicleID uuid.UUID, req u
 	}
 
 	return updated, nil
+}
+
+func clearColumns(fields []string) []string {
+	if fields == nil {
+		return []string{}
+	}
+	return fields
 }
 
 // fuelTypeChanged reports whether the vehicle now says something different about its own

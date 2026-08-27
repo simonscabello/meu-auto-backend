@@ -17,10 +17,11 @@ WITH entries AS (
     -- NULL columns where the branches below select NULL, so the generated struct would use
     -- int64/int32 and every odometer or obligation row would fail to scan at runtime.
     -- Casting in SQL does not fix it — that was tried. What fixes it is the per-column
-    -- override on entries.title / amount_cents / mileage_km in sqlc.yaml.
+    -- override on entries.title / amount_cents / mileage_km / care in sqlc.yaml.
     --
     -- If you add a branch to this UNION with a column that can be NULL, check the
-    -- generated struct.
+    -- generated struct. `care` is nullable on the odometer and obligation branches, so
+    -- it has an override on entries.care in sqlc.yaml (pointer: true).
     SELECT 'manutencao'::text AS kind,
            r.id,
            r.occurred_on,
@@ -31,7 +32,11 @@ WITH entries AS (
              WHERE ri.maintenance_record_id = r.id) AS title,
            r.workshop_name                          AS subtitle,
            r.total_cost_cents                       AS amount_cents,
-           r.mileage_km                             AS mileage_km
+           r.mileage_km                             AS mileage_km,
+           (SELECT bool_and(i.kind = 'care')
+              FROM maintenance_record_items ri
+              JOIN maintenance_items i ON i.id = ri.maintenance_item_id
+             WHERE ri.maintenance_record_id = r.id) AS care
     FROM maintenance_records r
     WHERE r.vehicle_id = sqlc.arg('vehicle_id')
       AND r.deleted_at IS NULL
@@ -45,7 +50,8 @@ WITH entries AS (
            NULL::text,
            o.source,
            NULL::bigint,
-           o.mileage_km
+           o.mileage_km,
+           NULL::boolean
     FROM odometer_readings o
     WHERE o.vehicle_id = sqlc.arg('vehicle_id')
       AND o.source_maintenance_id IS NULL
@@ -59,12 +65,13 @@ WITH entries AS (
            NULL::text,
            ob.reference_year::text,
            ob.paid_amount_cents,
-           NULL::integer
+           NULL::integer,
+           NULL::boolean
     FROM vehicle_obligations ob
     WHERE ob.vehicle_id = sqlc.arg('vehicle_id')
       AND ob.paid_on IS NOT NULL
 )
-SELECT kind, id, occurred_on, created_at, title, subtitle, amount_cents, mileage_km
+SELECT kind, id, occurred_on, created_at, title, subtitle, amount_cents, mileage_km, care
 FROM entries
 WHERE (
         sqlc.narg('cursor_occurred_on')::date IS NULL

@@ -44,6 +44,7 @@ func (h *Handler) Mount(r chi.Router) {
 		// Flat by id: a plan or record id is globally unique and the client already holds
 		// it, so making them repeat the vehicle id would only add a way to get the pair
 		// wrong.
+		r.Get("/maintenance-plans/{planID}", h.getPlan)
 		r.Patch("/maintenance-plans/{planID}", h.updatePlan)
 		r.Delete("/maintenance-plans/{planID}", h.deletePlan)
 
@@ -148,6 +149,26 @@ func (h *Handler) createPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusCreated, toBarePlanResponse(plan))
+}
+
+func (h *Handler) getPlan(w http.ResponseWriter, r *http.Request) {
+	userID, err := callerID(r)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	planID, err := httpx.PathUUID(r, "planID")
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+
+	due, err := h.service.GetPlan(r.Context(), userID, planID)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toPlanResponse(due))
 }
 
 func (h *Handler) updatePlan(w http.ResponseWriter, r *http.Request) {

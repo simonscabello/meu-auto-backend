@@ -51,7 +51,7 @@ type MaintenanceRecord struct {
 	ID               uuid.UUID
 	VehicleID        uuid.UUID
 	OccurredOn       time.Time
-	MileageKm        int32
+	MileageKm        *int32
 	Kind             string
 	WorkshopName     *string
 	TotalCostCents   int64

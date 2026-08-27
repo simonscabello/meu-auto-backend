@@ -49,7 +49,8 @@ func ComputeWarranty(
 	itemName string,
 	warrantyMonths, warrantyKm *int32,
 	recordOccurredOn time.Time,
-	recordMileageKm, currentMileageKm int32,
+	recordMileageKm *int32,
+	currentMileageKm int32,
 	today time.Time,
 ) Warranty {
 	warranty := Warranty{
@@ -70,8 +71,8 @@ func ComputeWarranty(
 		byTime = evaluate(int(remainingDays), int(warrantyAlertDays))
 	}
 
-	if warrantyKm != nil {
-		untilKm := recordMileageKm + *warrantyKm
+	if warrantyKm != nil && recordMileageKm != nil {
+		untilKm := *recordMileageKm + *warrantyKm
 		remainingKm := untilKm - currentMileageKm
 
 		warranty.UntilKm, warranty.RemainingKm = &untilKm, &remainingKm

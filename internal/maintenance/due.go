@@ -106,17 +106,21 @@ type Plan struct {
 
 // Performed is the most recent time an item was actually done. It is the point the next
 // due date is measured from.
+//
+// MileageKm is nil when the record did not assert a distance — a care habit (calibrar
+// pneus, lavar o carro) has a date and no odometer fact. The distance dimension must not
+// be evaluated from that (SPEC.md RN-03).
 type Performed struct {
 	RecordID   uuid.UUID
 	OccurredOn time.Time
-	MileageKm  int32
+	MileageKm  *int32
 }
 
 // Due is the computed state of one plan.
 //
-// DueAtKm and RemainingKm are nil when the plan has no distance interval; DueOn and
-// RemainingDays are nil when it has no time interval. A nil is "this dimension does not
-// apply", never "zero".
+// DueAtKm and RemainingKm are nil when the plan has no distance interval, or when the
+// last record did not assert a mileage; DueOn and RemainingDays are nil when it has no
+// time interval. A nil is "this dimension does not apply", never "zero".
 type Due struct {
 	Plan   Plan       `json:"-"`
 	Status Status     `json:"status"`
@@ -157,8 +161,8 @@ func ComputeDue(plan Plan, last *Performed, currentMileageKm int32, today time.T
 	// starts neutral and is only overwritten when it applies.
 	byDistance, byTime := StatusOnTrack, StatusOnTrack
 
-	if plan.IntervalKm != nil {
-		dueAtKm := last.MileageKm + *plan.IntervalKm
+	if plan.IntervalKm != nil && last.MileageKm != nil {
+		dueAtKm := *last.MileageKm + *plan.IntervalKm
 		remainingKm := dueAtKm - currentMileageKm
 
 		due.DueAtKm, due.RemainingKm = &dueAtKm, &remainingKm

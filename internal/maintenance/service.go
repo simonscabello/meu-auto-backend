@@ -139,27 +139,72 @@ func (s *Service) listPlans(ctx context.Context, vehicleID uuid.UUID, currentMil
 
 	plans := make([]Plan, 0, len(rows))
 	for _, row := range rows {
-		plans = append(plans, Plan{
-			ID:              row.ID,
-			ItemID:          row.MaintenanceItemID,
-			ItemSlug:        row.ItemSlug,
-			ItemName:        row.ItemName,
-			ItemKind:        row.ItemKind,
-			Origin:          row.Origin,
-			Strategy:        row.Strategy,
-			HistoryStatus:   row.HistoryStatus,
-			Notes:           row.Notes,
-			HistoryQuestion: row.ItemHistoryQuestion,
-			HistoryPriority: row.ItemHistoryPriority,
-			IntervalKm:      row.IntervalKm,
-			IntervalMonths:  row.IntervalMonths,
-			IntervalDays:    row.IntervalDays,
-			AlertKm:         row.AlertKm,
-			AlertDays:       row.AlertDays,
-		})
+		plans = append(plans, planFromListed(row))
 	}
 
 	return ComputeAll(plans, lastByItem, currentMileageKm, s.today()), nil
+}
+
+// GetPlan returns one plan with its computed due state, including a plan marked
+// not_applicable — a deep link and the profile screen both need to read one by id.
+func (s *Service) GetPlan(ctx context.Context, userID, planID uuid.UUID) (Due, error) {
+	row, currentMileageKm, err := s.authorizePlan(ctx, userID, planID)
+	if err != nil {
+		return Due{}, err
+	}
+
+	lastByItem, err := s.repo.LastPerformedByItem(ctx, row.VehicleID)
+	if err != nil {
+		return Due{}, apperr.Internal(err)
+	}
+
+	var last *Performed
+	if performed, ok := lastByItem[row.MaintenanceItemID]; ok {
+		last = &performed
+	}
+	return ComputeDue(planFromLoaded(row), last, currentMileageKm, s.today()), nil
+}
+
+func planFromListed(row db.ListMaintenancePlansForVehicleRow) Plan {
+	return Plan{
+		ID:              row.ID,
+		ItemID:          row.MaintenanceItemID,
+		ItemSlug:        row.ItemSlug,
+		ItemName:        row.ItemName,
+		ItemKind:        row.ItemKind,
+		Origin:          row.Origin,
+		Strategy:        row.Strategy,
+		HistoryStatus:   row.HistoryStatus,
+		Notes:           row.Notes,
+		HistoryQuestion: row.ItemHistoryQuestion,
+		HistoryPriority: row.ItemHistoryPriority,
+		IntervalKm:      row.IntervalKm,
+		IntervalMonths:  row.IntervalMonths,
+		IntervalDays:    row.IntervalDays,
+		AlertKm:         row.AlertKm,
+		AlertDays:       row.AlertDays,
+	}
+}
+
+func planFromLoaded(row db.GetMaintenancePlanRow) Plan {
+	return Plan{
+		ID:              row.ID,
+		ItemID:          row.MaintenanceItemID,
+		ItemSlug:        row.ItemSlug,
+		ItemName:        row.ItemName,
+		ItemKind:        row.ItemKind,
+		Origin:          row.Origin,
+		Strategy:        row.Strategy,
+		HistoryStatus:   row.HistoryStatus,
+		Notes:           row.Notes,
+		HistoryQuestion: row.ItemHistoryQuestion,
+		HistoryPriority: row.ItemHistoryPriority,
+		IntervalKm:      row.IntervalKm,
+		IntervalMonths:  row.IntervalMonths,
+		IntervalDays:    row.IntervalDays,
+		AlertKm:         row.AlertKm,
+		AlertDays:       row.AlertDays,
+	}
 }
 
 // ---------- profile ----------
@@ -309,7 +354,7 @@ func (s *Service) CreatePlan(ctx context.Context, userID, vehicleID uuid.UUID, r
 }
 
 func (s *Service) UpdatePlan(ctx context.Context, userID, planID uuid.UUID, req updatePlanRequest) (db.MaintenancePlan, error) {
-	if _, err := s.authorizePlan(ctx, userID, planID); err != nil {
+	if _, _, err := s.authorizePlan(ctx, userID, planID); err != nil {
 		return db.MaintenancePlan{}, err
 	}
 	if err := req.validate(); err != nil {
@@ -339,7 +384,7 @@ func (s *Service) UpdatePlan(ctx context.Context, userID, planID uuid.UUID, req 
 }
 
 func (s *Service) DeletePlan(ctx context.Context, userID, planID uuid.UUID) error {
-	if _, err := s.authorizePlan(ctx, userID, planID); err != nil {
+	if _, _, err := s.authorizePlan(ctx, userID, planID); err != nil {
 		return err
 	}
 	err := s.repo.DeactivatePlan(ctx, planID)
@@ -363,15 +408,23 @@ func (s *Service) CreateRecord(ctx context.Context, userID, vehicleID uuid.UUID,
 		return db.MaintenanceRecord{}, nil, false, err
 	}
 
-	// The record asserts a mileage, so it has to satisfy the same odometer invariant a
-	// manual reading does.
-	if err := s.vehicle.CheckOdometerConsistency(ctx, vehicleID, req.occurredOn, req.MileageKm); err != nil {
+	items, kinds, err := s.buildRecordItems(ctx, userID, req.Items)
+	if err != nil {
+		return db.MaintenanceRecord{}, nil, false, err
+	}
+	if err := errIfMileageMissing(req.MileageKm, kinds); err != nil {
 		return db.MaintenanceRecord{}, nil, false, err
 	}
 
-	items, err := s.buildRecordItems(ctx, userID, req.Items)
-	if err != nil {
-		return db.MaintenanceRecord{}, nil, false, err
+	// A care-only record may omit mileage: there is no odometer fact to check or to
+	// write. req.Source is a validation instruction, not the value persisted on the
+	// odometer reading. When a reading is produced it is always written with source =
+	// 'maintenance' and source_maintenance_id set (CreateMaintenanceOdometerReading).
+	// "correction" only skips neighbour checking, the same way POST /odometer does.
+	if req.MileageKm != nil && req.Source != recordSourceCorrection {
+		if err := s.vehicle.CheckOdometerConsistency(ctx, vehicleID, req.occurredOn, *req.MileageKm); err != nil {
+			return db.MaintenanceRecord{}, nil, false, err
+		}
 	}
 
 	recordID := uuid.New()
@@ -416,23 +469,26 @@ func (s *Service) CreateRecord(ctx context.Context, userID, vehicleID uuid.UUID,
 // One lookup per line, capped at maxItemsPerRec. A batch query would save round trips, but
 // twenty is the ceiling and doing it this way keeps the "can this user reference this
 // item" check in one obvious place.
-func (s *Service) buildRecordItems(ctx context.Context, userID uuid.UUID, requested []recordItemRequest) ([]db.CreateMaintenanceRecordItemParams, error) {
+func (s *Service) buildRecordItems(ctx context.Context, userID uuid.UUID, requested []recordItemRequest) ([]db.CreateMaintenanceRecordItemParams, []string, error) {
 	out := make([]db.CreateMaintenanceRecordItemParams, 0, len(requested))
+	kinds := make([]string, 0, len(requested))
 
 	for _, line := range requested {
 		itemID, err := uuid.Parse(line.MaintenanceItemID)
 		if err != nil {
-			return nil, apperr.Validation("Não foi possível registrar a manutenção.",
+			return nil, nil, apperr.Validation("Não foi possível registrar a manutenção.",
 				map[string]any{"items": "Identificador de item inválido."})
 		}
 
-		if _, err := s.repo.ItemForUser(ctx, itemID, userID); err != nil {
+		item, err := s.repo.ItemForUser(ctx, itemID, userID)
+		if err != nil {
 			if errors.Is(err, ErrItemNotFound) {
-				return nil, apperr.NotFound("Item de manutenção não encontrado.")
+				return nil, nil, apperr.NotFound("Item de manutenção não encontrado.")
 			}
-			return nil, apperr.Internal(err)
+			return nil, nil, apperr.Internal(err)
 		}
 
+		kinds = append(kinds, item.Kind)
 		out = append(out, db.CreateMaintenanceRecordItemParams{
 			MaintenanceItemID: itemID,
 			Description:       line.Description,
@@ -442,7 +498,7 @@ func (s *Service) buildRecordItems(ctx context.Context, userID uuid.UUID, reques
 			WarrantyKm:        line.WarrantyKm,
 		})
 	}
-	return out, nil
+	return out, kinds, nil
 }
 
 func (s *Service) GetRecord(ctx context.Context, userID, recordID uuid.UUID) (db.MaintenanceRecord, []db.ListMaintenanceRecordItemsRow, error) {
@@ -535,10 +591,16 @@ func (s *Service) UpdateRecord(ctx context.Context, userID, recordID uuid.UUID, 
 		}
 		mileageKm := existing.MileageKm
 		if req.MileageKm != nil {
-			mileageKm = *req.MileageKm
+			mileageKm = req.MileageKm
 		}
-		if err := s.vehicle.CheckOdometerConsistency(ctx, existing.VehicleID, occurredOn, mileageKm); err != nil {
-			return db.MaintenanceRecord{}, nil, err
+		// req.Source is a validation instruction, not the value persisted on the
+		// odometer reading. The reading this record produced stays source =
+		// 'maintenance'; "correction" only skips neighbour checking. A care record
+		// with no mileage has no reading to check.
+		if mileageKm != nil && req.Source != recordSourceCorrection {
+			if err := s.vehicle.CheckOdometerConsistency(ctx, existing.VehicleID, occurredOn, *mileageKm); err != nil {
+				return db.MaintenanceRecord{}, nil, err
+			}
 		}
 	}
 

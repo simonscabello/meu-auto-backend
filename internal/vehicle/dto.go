@@ -158,9 +158,9 @@ func (r *createVehicleRequest) normalizeAndValidate(today time.Time) error {
 
 // updateVehicleRequest is PATCH: an omitted field stays as it is.
 //
-// A field cannot be cleared back to empty through this endpoint. Nothing has asked for
-// that yet, and doing it properly needs an explicit affordance rather than overloading
-// "null" — which is indistinguishable from "absent" once decoded.
+// `null` on a field is indistinguishable from "absent" once decoded, so it cannot mean
+// "empty this". Optional columns named in Clear are set back to NULL instead. brand and
+// model are NOT NULL and are rejected there.
 type updateVehicleRequest struct {
 	Brand           *string `json:"brand"`
 	Model           *string `json:"model"`
@@ -176,11 +176,16 @@ type updateVehicleRequest struct {
 
 	// Re-picking the catalogue entry — "I chose the wrong version". Sending it relinks all
 	// three levels; omitting it leaves the existing link alone, like every other field
-	// here. There is no way to clear the link back to null, for the same reason no other
-	// optional can be cleared: `null` is indistinguishable from absent once decoded.
+	// here. There is no way to clear the link back to null: it is not in `clear`, because
+	// unlinking is not the same as emptying a snapshot field.
 	CatalogModelYearID *string `json:"catalog_model_year_id"`
 
 	FipeCode *string `json:"fipe_code"`
+
+	// Clear names optional columns to set back to NULL. `null` on a field already means
+	// "leave unchanged" after JSON decode, so emptying nickname or plate needs its own
+	// affordance — the same reason UpdateObligationRequest has clear_payment.
+	Clear []string `json:"clear"`
 }
 
 func (r *updateVehicleRequest) normalizeAndValidate(today time.Time) error {
@@ -216,7 +221,73 @@ func (r *updateVehicleRequest) normalizeAndValidate(today time.Time) error {
 	r.FipeCode = trimOptional(r.FipeCode)
 	optionalTextLength(errs, "fipe_code", r.FipeCode)
 
+	r.validateClear(errs)
+
 	return errs.Err("Não foi possível atualizar o veículo.")
+}
+
+// Optional columns a PATCH may set back to NULL. brand and model are excluded on
+// purpose: they are NOT NULL, and emptying them is not a vehicle edit, it is destroying
+// the identity of the car.
+var clearableVehicleFields = map[string]bool{
+	"nickname": true, "plate": true, "color": true, "renavam": true,
+	"chassis": true, "version": true, "fuel_type": true, "fipe_code": true,
+	"manufacture_year": true, "model_year": true,
+}
+
+func (r *updateVehicleRequest) validateClear(errs validate.Errors) {
+	if len(r.Clear) == 0 {
+		return
+	}
+
+	seen := make(map[string]bool, len(r.Clear))
+	var unknown []string
+	for _, raw := range r.Clear {
+		field := strings.TrimSpace(raw)
+		if !clearableVehicleFields[field] {
+			if !seen[field] {
+				unknown = append(unknown, field)
+				seen[field] = true
+			}
+			continue
+		}
+		if seen[field] {
+			continue
+		}
+		seen[field] = true
+		if r.valuePresent(field) {
+			errs.Add(field, "Não é possível limpar e informar o valor na mesma requisição.")
+		}
+	}
+	if len(unknown) > 0 {
+		errs.Add("clear", "Campo não reconhecido: "+strings.Join(unknown, ", ")+".")
+	}
+}
+
+func (r *updateVehicleRequest) valuePresent(field string) bool {
+	switch field {
+	case "nickname":
+		return r.Nickname != nil
+	case "plate":
+		return r.Plate != nil
+	case "color":
+		return r.Color != nil
+	case "renavam":
+		return r.Renavam != nil
+	case "chassis":
+		return r.Chassis != nil
+	case "version":
+		return r.Version != nil
+	case "fuel_type":
+		return r.FuelType != nil
+	case "fipe_code":
+		return r.FipeCode != nil
+	case "manufacture_year":
+		return r.ManufactureYear != nil
+	case "model_year":
+		return r.ModelYear != nil
+	}
+	return false
 }
 
 type createReadingRequest struct {

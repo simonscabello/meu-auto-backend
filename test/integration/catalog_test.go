@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -374,13 +375,54 @@ func TestCatalogReportsUpstreamFailureWithoutLeakingIt(t *testing.T) {
 			if message == "" {
 				t.Fatalf("no message in the error envelope: %s", res.Body)
 			}
+
+			// Everything we say is scanned except details.request_id — see
+			// scannableError for why that one field is dropped rather than the check
+			// loosened.
+			scanned := scannableError(t, res.Body)
 			for _, leak := range []string{"fipe", "parallelum", "502", "503", "429", "http"} {
-				if strings.Contains(strings.ToLower(string(res.Body)), leak) {
+				if strings.Contains(scanned, leak) {
 					t.Errorf("the response leaks %q to the client: %s", leak, res.Body)
 				}
 			}
 		})
 	}
+}
+
+// scannableError renders an error envelope as lowercase text for the leak check above,
+// with details.request_id removed.
+//
+// The request id says nothing about anybody upstream — support uses it to find the log
+// line — and it is the one field here that is not ours to police. Two ways it breaks the
+// check: a generated UUIDv7 is hex, and hex spells 502, 503 or 429 often enough to trip
+// roughly 0.9% of ids (the observed failure was 01a04393-4a21-7257-b35c-503dbe292d06);
+// and the id can instead be echoed from the client's own X-Request-Id header, so the app
+// could fail this test by choosing an unlucky one. Either way the raw body failed at
+// random on the id rather than on a leak.
+//
+// Dropping the one opaque field, rather than narrowing the check to message and code,
+// keeps the rest of the envelope under it: the code, the message, and any detail added
+// later all still have to come back clean.
+func scannableError(t *testing.T, raw []byte) string {
+	t.Helper()
+
+	var body struct {
+		Error struct {
+			Code    string         `json:"code"`
+			Message string         `json:"message"`
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("response is not the error envelope: %v\nbody: %s", err, raw)
+	}
+	delete(body.Error.Details, "request_id")
+
+	rendered, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("re-encode the error envelope: %v", err)
+	}
+	return strings.ToLower(string(rendered))
 }
 
 // TestCatalogServesFromPostgresWhileTheProviderIsDown is the payoff of mirroring.

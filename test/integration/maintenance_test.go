@@ -222,6 +222,136 @@ func TestDueEngineAnswersTheSameThroughEveryEndpoint(t *testing.T) {
 	}
 }
 
+func TestCareRecordWithoutMileageDoesNotTouchTheOdometer(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+
+	u := e.newUser()
+	vehicleID := u.createVehicle(map[string]any{"current_mileage_km": 50_000})
+	path := fmt.Sprintf("/v1/vehicles/%s/maintenance-records", vehicleID)
+
+	before := e.countRows(t, `SELECT count(*) FROM odometer_readings WHERE vehicle_id = $1`,
+		uuid.MustParse(vehicleID))
+
+	created := u.post(path, map[string]any{
+		"kind":  "performed",
+		"items": []map[string]any{{"maintenance_item_id": u.itemIDByKind("care")}},
+	}).expect(http.StatusCreated).json()
+
+	if created["mileage_km"] != nil {
+		t.Errorf("mileage_km = %v, want null", created["mileage_km"])
+	}
+	if after := e.countRows(t, `SELECT count(*) FROM odometer_readings WHERE vehicle_id = $1`,
+		uuid.MustParse(vehicleID)); after != before {
+		t.Errorf("care record created %d odometer readings", after-before)
+	}
+	if km := u.currentMileage(vehicleID); km != 50_000 {
+		t.Errorf("current_mileage_km moved to %d", km)
+	}
+}
+
+func TestMaintenanceRecordWithoutMileageIsRejected(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+
+	u := e.newUser()
+	vehicleID := u.createVehicle()
+	path := fmt.Sprintf("/v1/vehicles/%s/maintenance-records", vehicleID)
+
+	res := u.post(path, map[string]any{
+		"kind":  "performed",
+		"items": []map[string]any{{"maintenance_item_id": u.itemIDByKind("maintenance")}},
+	}).expectError(http.StatusUnprocessableEntity, "validation_failed")
+
+	if msg := fieldMessage(t, res, "mileage_km"); msg != "Informe a quilometragem." {
+		t.Errorf("mileage_km = %q, want %q", msg, "Informe a quilometragem.")
+	}
+}
+
+func TestMixedRecordWithoutMileageIsRejected(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+
+	u := e.newUser()
+	vehicleID := u.createVehicle()
+	path := fmt.Sprintf("/v1/vehicles/%s/maintenance-records", vehicleID)
+
+	res := u.post(path, map[string]any{
+		"kind": "performed",
+		"items": []map[string]any{
+			{"maintenance_item_id": u.itemIDByKind("care")},
+			{"maintenance_item_id": u.itemIDByKind("maintenance")},
+		},
+	}).expectError(http.StatusUnprocessableEntity, "validation_failed")
+
+	if msg := fieldMessage(t, res, "mileage_km"); msg != "Informe a quilometragem." {
+		t.Errorf("mileage_km = %q, want %q", msg, "Informe a quilometragem.")
+	}
+}
+
+func TestTimelineMarksCareWithoutChangingKind(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+
+	u := e.newUser()
+	vehicleID := u.createVehicle(map[string]any{"current_mileage_km": 50_000})
+	records := fmt.Sprintf("/v1/vehicles/%s/maintenance-records", vehicleID)
+
+	careID := u.post(records, map[string]any{
+		"kind":  "performed",
+		"items": []map[string]any{{"maintenance_item_id": u.itemIDByKind("care")}},
+	}).expect(http.StatusCreated).id()
+
+	oilID := u.post(records, map[string]any{
+		"mileage_km": 50_000,
+		"kind":       "performed",
+		"items":      []map[string]any{{"maintenance_item_id": u.itemIDByKind("maintenance")}},
+	}).expect(http.StatusCreated).id()
+
+	var page struct {
+		Data []struct {
+			ID   string `json:"id"`
+			Kind string `json:"kind"`
+			Care *bool  `json:"care"`
+		} `json:"data"`
+	}
+	u.get(fmt.Sprintf("/v1/vehicles/%s/timeline", vehicleID)).
+		expect(http.StatusOK).decode(&page)
+
+	byID := map[string]struct {
+		Kind string
+		Care *bool
+	}{}
+	for _, entry := range page.Data {
+		byID[entry.ID] = struct {
+			Kind string
+			Care *bool
+		}{entry.Kind, entry.Care}
+	}
+
+	care, ok := byID[careID]
+	if !ok {
+		t.Fatal("care record missing from the timeline")
+	}
+	if care.Kind != "manutencao" {
+		t.Errorf("care kind = %q, want manutencao", care.Kind)
+	}
+	if care.Care == nil || !*care.Care {
+		t.Errorf("care.care = %v, want true", care.Care)
+	}
+
+	oil, ok := byID[oilID]
+	if !ok {
+		t.Fatal("maintenance record missing from the timeline")
+	}
+	if oil.Kind != "manutencao" {
+		t.Errorf("oil kind = %q, want manutencao", oil.Kind)
+	}
+	if oil.Care == nil || *oil.Care {
+		t.Errorf("oil.care = %v, want false", oil.Care)
+	}
+}
+
 // ---------- helpers ----------
 
 type planView struct {
@@ -255,6 +385,21 @@ func (u *user) planForItem(vehicleID, itemID string) planView {
 	}
 	u.t.Fatalf("vehicle %s has no plan for item %s", vehicleID, itemID)
 	return planView{}
+}
+
+func fieldMessage(t *testing.T, res *response, field string) string {
+	t.Helper()
+
+	var body struct {
+		Error struct {
+			Details struct {
+				Fields map[string]any `json:"fields"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	res.decode(&body)
+	msg, _ := body.Error.Details.Fields[field].(string)
+	return msg
 }
 
 func (u *user) catalogueIDs(n int) []string {

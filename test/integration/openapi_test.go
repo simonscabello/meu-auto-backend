@@ -14,10 +14,10 @@ import (
 )
 
 // api/openapi.yaml is the contract, and it is hand-written (SPEC.md D-03). The Flutter app
-// generates its Dart client from it, the two repositories deploy independently, and a
+// writes its Dart models by hand; the two repositories deploy independently, and a
 // shipped app cannot be force-updated — so a route that exists in one and not the other is
 // not a documentation problem, it is a client that calls a 404 or an endpoint no client
-// knows about.
+// knows about. The matching guard on the app side is test/contract/openapi_paths_test.dart.
 //
 // CLAUDE.md said plainly that nothing automated caught that drift. This does.
 
@@ -46,15 +46,15 @@ func TestRouterAndOpenAPIAgree(t *testing.T) {
 	missingFromSpec := difference(served, documented)
 	if len(missingFromSpec) > 0 {
 		t.Errorf("served but absent from %s:\n  %s\n\n"+
-			"The app generates its client from that file: an endpoint missing there does "+
-			"not exist as far as the app is concerned.",
+			"The app writes its Dart models by hand against this file: an endpoint "+
+			"missing there does not exist as far as the app is concerned.",
 			filepath.Base(openAPIPath), strings.Join(missingFromSpec, "\n  "))
 	}
 
 	missingFromRouter := difference(documented, served)
 	if len(missingFromRouter) > 0 {
 		t.Errorf("documented in %s but not served:\n  %s\n\n"+
-			"A generated client will call these and get the 404 envelope.",
+			"The app will call these and get the 404 envelope.",
 			filepath.Base(openAPIPath), strings.Join(missingFromRouter, "\n  "))
 	}
 }

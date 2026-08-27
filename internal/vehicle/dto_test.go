@@ -231,6 +231,48 @@ func TestCreateReadingRejectsFutureAndMalformedDates(t *testing.T) {
 	}
 }
 
+func TestUpdateVehicleClearRejectsUnknownAndRequiredFields(t *testing.T) {
+	t.Parallel()
+
+	for _, field := range []string{"apelido", "brand", "model", "catalog_model_year_id"} {
+		req := updateVehicleRequest{Clear: []string{field}}
+		if fieldErrors(t, req.normalizeAndValidate(today))["clear"] == nil {
+			t.Errorf("clear %q was accepted", field)
+		}
+	}
+}
+
+func TestUpdateVehicleClearConflictsWithAValueInTheSameRequest(t *testing.T) {
+	t.Parallel()
+
+	req := updateVehicleRequest{
+		Nickname: ptr("Golzinho"),
+		Plate:    ptr("ABC1D23"),
+		Clear:    []string{"nickname", "plate"},
+	}
+	fields := fieldErrors(t, req.normalizeAndValidate(today))
+	if fields["nickname"] == nil {
+		t.Error("clearing nickname while sending a nickname was accepted")
+	}
+	if fields["plate"] == nil {
+		t.Error("clearing plate while sending a plate was accepted")
+	}
+}
+
+func TestUpdateVehicleClearAcceptsKnownOptionals(t *testing.T) {
+	t.Parallel()
+
+	req := updateVehicleRequest{
+		Clear: []string{
+			"nickname", "plate", "color", "renavam", "chassis", "version",
+			"fuel_type", "fipe_code", "manufacture_year", "model_year",
+		},
+	}
+	if err := req.normalizeAndValidate(today); err != nil {
+		t.Errorf("clearing every optional was rejected: %v", err)
+	}
+}
+
 func TestValidateMileageBounds(t *testing.T) {
 	t.Parallel()
 

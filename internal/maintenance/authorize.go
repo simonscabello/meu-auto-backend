@@ -18,21 +18,26 @@ import (
 // not see this" confirms it exists, which is enough to probe for real ids.
 
 // authorizePlan resolves a plan and confirms the caller owns its vehicle.
-func (s *Service) authorizePlan(ctx context.Context, userID, planID uuid.UUID) (db.GetMaintenancePlanRow, error) {
+// authorizePlan resolves a plan and confirms the caller owns its vehicle.
+//
+// The mileage comes back because GetPlan needs it for ComputeDue, and asking twice would
+// be a second round trip for a number we already have.
+func (s *Service) authorizePlan(ctx context.Context, userID, planID uuid.UUID) (db.GetMaintenancePlanRow, int32, error) {
 	plan, err := s.repo.PlanByID(ctx, planID)
 	switch {
 	case errors.Is(err, ErrPlanNotFound):
-		return db.GetMaintenancePlanRow{}, errPlanNotFound()
+		return db.GetMaintenancePlanRow{}, 0, errPlanNotFound()
 	case err != nil:
-		return db.GetMaintenancePlanRow{}, apperr.Internal(err)
+		return db.GetMaintenancePlanRow{}, 0, apperr.Internal(err)
 	}
 
-	if _, _, _, err := s.vehicle.AuthorizeVehicleForPlanning(ctx, userID, plan.VehicleID); err != nil {
+	_, _, currentMileageKm, err := s.vehicle.AuthorizeVehicleForPlanning(ctx, userID, plan.VehicleID)
+	if err != nil {
 		// The vehicle is not the caller's, so neither is the plan. Report it the same way
 		// a missing plan is reported.
-		return db.GetMaintenancePlanRow{}, errPlanNotFound()
+		return db.GetMaintenancePlanRow{}, 0, errPlanNotFound()
 	}
-	return plan, nil
+	return plan, currentMileageKm, nil
 }
 
 // authorizeRecord loads a record the caller may act on.
