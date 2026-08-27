@@ -160,7 +160,11 @@ gofmt -l .                           # see the CRLF note below before believing 
 
 **`internal/maintenance/due.go` is the most important file in this repo.** It is pure — no database, no clock, no context — and it holds the rule the whole product exists to serve. Change it only with its test suite in front of you, and keep it that way: the same function serves an HTTP request today and a notification cron later, and the two must never disagree.
 
-Deploy is prepared but **not yet done** — `Dockerfile`, `.dockerignore`, `railway.toml` and [`docs/DEPLOY.md`](./docs/DEPLOY.md). The production image was built and exercised locally (23.7 MB distroless; `postgresql://` normalisation, embedded tzdata, migrations on boot, SIGTERM drain, and every config guard confirmed in the real container). The Railway project itself needs the owner's account.
+**Deploy is live on Railway** — `https://meu-auto-backend-production.up.railway.app`, built from `Dockerfile` / `railway.toml` (23.7 MB distroless; `postgresql://` normalisation, embedded tzdata, SIGTERM drain). See [`docs/DEPLOY.md`](./docs/DEPLOY.md).
+
+**A push to `main` deploys, and deploying applies migrations.** They run at boot and a failure aborts the process, so a serving instance is proof the schema is current — and it also means a migration that touches existing rows touches PRODUCTION rows the moment it is pushed. Migration 000010 is the first one in this repo that does (it corrects plans the vehicle's own `fuel_type` makes impossible). Read a data-touching migration twice before pushing it, and take a backup first; there is no release gate between `git push` and the users.
+
+The quickest check that a deploy carried the code you expect: an unauthenticated request to a route added in that change answers `401` if it is registered and `404` if it is not, and `/readyz` answers `200` only once the pool is up.
 
 **The integration net is in place** (`test/`), which was the gap that had to close before MVP-2 — abastecimento writes into `odometer_readings` and the cost totals, exactly where a silent regression would land.
 
