@@ -2674,6 +2674,9 @@ components:
                 impede derivar qualquer coisa sobre o motor.
             open_questions: { type: integer }
         last_abastecimento:
+          # type + allOf, not a bare nullable $ref: in OpenAPI 3.0 `nullable` needs a
+          # sibling `type` (see fipe_price).
+          type: object
           nullable: true
           description: |
             O abastecimento mais recente, com o consumo já derivado pelo módulo. Ausente

@@ -51,14 +51,16 @@ Consequências:
 | Item | Motivo |
 |---|---|
 | Abastecimento | **Implementado.** `internal/abastecimento`, consumo por tanque cheio derivado. |
-| Despesas avulsas | Sem combustível, o relatório de custo estaria incompleto de qualquer forma. |
+| Despesas avulsas | Estacionamento, pedágio, lavagem, multa — categoria `expenses` no MVP-2. |
 | Anexos / fotos | **Única infra nova do projeto** (object storage). MVP-1 = só Postgres. |
 | Push notification | O app faz pull do dashboard. Nenhuma tabela de notificação agora. |
 | Transferência de histórico | Só garantimos que a modelagem não impeça. |
-| FIPE, SENATRAN, DETRAN | Nenhuma integração externa no MVP. |
+| SENATRAN / DETRAN | Nenhuma integração oficial no MVP. FIPE (catálogo) já está em `internal/catalog`. |
 
-> **O dashboard do MVP-1 não deve prometer "custo total do veículo".** Sem combustível,
-> esse número está errado por ~60%. Ele mostra "custo de manutenção e obrigações".
+> **`tracked_cents` não é o custo de rodar o veículo.** Continua sendo manutenção +
+> IPVA/licenciamento + seguro, sem combustível, para o app publicado desenhar três barras
+> que somam o total exibido. Combustível entra em `abastecimento_cents`, `total_cents` e
+> `categories`. Não rotule `tracked_cents` como "custo total".
 
 ---
 
@@ -367,7 +369,8 @@ o `CLAUDE.md` do app.
   Índice único parcial: um veículo tem no máximo um `owner` ativo.
 - **`odometer_readings`** — `vehicle_id`, `mileage_km`, `occurred_on`, `source`
   (`manual` | `maintenance` | `abastecimento` | `correction`),
-  `source_maintenance_id` (FK nullable, `ON DELETE CASCADE`), `recorded_by_user_id`.
+  `source_maintenance_id` e `source_abastecimento_id` (FKs nullable, `ON DELETE CASCADE`),
+  `recorded_by_user_id`.
 
 ### Catálogo de veículos (D-16)
 
@@ -429,14 +432,20 @@ O `vehicles` ganha `catalog_brand_id`, `catalog_model_id`, `catalog_model_year_i
 > ("objetos de primeira classe, não reminders genéricos") é satisfeito por `kind`
 > explícito e endpoints dedicados — não por multiplicar tabelas de forma idêntica.
 
+### Abastecimento
+
+- **`abastecimentos`** — o fato, não um plano. `vehicle_id`, `occurred_on`, `mileage_km`,
+  `volume_ml`, `total_cost_cents`, `fuel` (`gasolina` | `etanol` | `diesel` | `gnv`),
+  `full_tank`, `station_name`, `notes`. `price_per_liter_cents` e `consumption` são
+  derivados na leitura e nunca armazenados. Consumo é tanque cheio a tanque cheio
+  (`internal/abastecimento/consumption.go`). Gera uma `odometer_reading` com
+  `source = abastecimento` e **não** reseta relógio de manutenção. Recarga elétrica
+  está fora (`refueling.supported: false`).
+
 ### MVP-2 (modeladas, não implementadas)
 
 - **`expenses`** — `occurred_on`, `category` (com o CHECK da RN-04), `amount_cents`.
 - **`attachments`** — `owner_type`, `owner_id`, `storage_key`, `mime`, `size_bytes`.
-
-`abastecimentos` saiu desta lista: volume em mililitros (`volume_ml`), custo em centavos,
-`fuel` ∈ gasolina|etanol|diesel|gnv, `full_tank`. `price_per_liter_cents` e o consumo são
-derivados, nunca armazenados. Consumo é tanque cheio a tanque cheio (`consumption.go`).
 
 ---
 
@@ -500,7 +509,8 @@ Escrita de manutenção = **uma transação**: `record` + `items` + (se houver k
    │  repository (sqlc gerado)               │
    ├─────────────────────────────────────────┤
    │  identity │ vehicle │ maintenance │     │
-   │  obligation │ insight                   │
+   │  obligation │ abastecimento │ catalog │ │
+   │  insight                                │
    └─────────────────────────────────────────┘
              │ pgx pool
              ▼
@@ -643,6 +653,7 @@ POST   /v1/maintenance-items                   # item custom do usuário
 
 GET    /v1/vehicles/{vehicleId}/maintenance-plans
 POST   /v1/vehicles/{vehicleId}/maintenance-plans
+GET    /v1/maintenance-plans/{planId}
 PATCH  /v1/maintenance-plans/{planId}
 DELETE /v1/maintenance-plans/{planId}
 ```
@@ -662,13 +673,25 @@ DELETE /v1/maintenance-records/{recordId}
 ```
 GET    /v1/vehicles/{vehicleId}/obligations?kind=ipva
 POST   /v1/vehicles/{vehicleId}/obligations
+GET    /v1/obligations/{obligationId}
 PATCH  /v1/obligations/{obligationId}
 DELETE /v1/obligations/{obligationId}
 
 GET    /v1/vehicles/{vehicleId}/seguros
 POST   /v1/vehicles/{vehicleId}/seguros
+GET    /v1/seguros/{seguroId}
 PATCH  /v1/seguros/{seguroId}
 DELETE /v1/seguros/{seguroId}
+```
+
+### Abastecimento
+
+```
+GET    /v1/vehicles/{vehicleId}/abastecimentos
+POST   /v1/vehicles/{vehicleId}/abastecimentos
+GET    /v1/abastecimentos/{abastecimentoId}
+PATCH  /v1/abastecimentos/{abastecimentoId}
+DELETE /v1/abastecimentos/{abastecimentoId}
 ```
 
 ### Operação
@@ -736,6 +759,44 @@ cliente que omite km estiver publicado. Até lá, o app instalado continua manda
 e nunca recebe nulo. Campo novo `care` na timeline é aditivo; `kind` permanece
 `manutencao`.
 
+### Auditoria de compatibilidade — Fase 11 (2026-08-27)
+
+Comparado contra `42543bd` (commit imediatamente anterior à Fase 1 deste fechamento).
+Regerado com `make test-golden`: o working tree de `test/golden` não mudou.
+
+**Golden (`git diff 42543bd -- test/golden`): 193 inserções, 0 remoções.**
+
+| Mudança | Classificação |
+|---|---|
+| Arquivos novos `abastecimento_*.json`, `maintenance_plan_get.json`, `obligation_get.json`, `seguro_get.json` | Adição — endpoints novos |
+| `dashboard.json`: `abastecimento_cents`, `categories[]`, `total_cents`, `last_abastecimento` | Adição — response |
+| `vehicle_*.json` e `odometer_create.json`: `refueling` | Adição — response |
+| `timeline.json`: `care` (`boolean\|null`) | Adição — response |
+| Nenhuma chave removida ou com tipo alterado no snapshot | — |
+
+O golden guarda o tipo do valor **nesta** resposta, não a nulidade do schema. Os
+registros de manutenção do snapshot ainda mandam km, então `mileage_km` continua
+`"number"` lá. A mudança de contrato está no OpenAPI.
+
+**OpenAPI (`git diff 42543bd -- api/openapi.yaml`): 420 inserções, 24 remoções.**
+As linhas removidas são reescrita de descrição ou expansão de um campo compacto
+para um bloco — nenhum campo saiu do contrato.
+
+| Mudança | Classificação |
+|---|---|
+| `GET` de `maintenance-plans/{id}`, `obligations/{id}`, `seguros/{id}` | Adição — mesmo shape da lista |
+| Cinco rotas de abastecimento | Adição |
+| `UpdateVehicleRequest.clear` | Request novo, opcional; ausente = comportamento idêntico ao de antes |
+| `source` em create/update de manutenção e abastecimento | Request novo, opcional; ausente = `manual` |
+| `CreateMaintenanceRecordRequest.mileage_km` sai de `required` e vira `nullable` | **Exceção declarada (Fase 2 / RN-03).** Um app antigo que sempre manda km não muda. O nulo só é produzido depois que o cliente que omite km estiver publicado. |
+| `MaintenanceRecord.mileage_km` `nullable: true` | A mesma exceção, no response |
+| `Vehicle.refueling`, `Dashboard.last_abastecimento`, `costs.abastecimento_cents` / `total_cents` / `categories`, `TimelineEntry.care`, `TimelineEntryKind = abastecimento` | Adição — response |
+| `tracked_cents` e `tracked_categories` | **Inalterados em significado.** Continuam sem combustível. Travado por `TestDashboardCostsKeepTrackedCentsWithoutFuel`. |
+| `full_tank` no create de abastecimento | Request novo; padrão `true` quando ausente |
+
+**Veredito:** aprovada. Só adições, com a única alteração de tipo/nulidade sendo
+`mileage_km` no registro de manutenção.
+
 ### D-02 — DTO explícito por versão, nunca struct do sqlc no JSON
 
 Se o DTO da API for o struct gerado do banco, toda migration vira potencialmente um
@@ -761,16 +822,17 @@ este `openapi.yaml` e falha se o app referenciar rota inexistente. Deste lado,
 implementa. Se o spec for gerado do código, qualquer refatoração vira mudança de
 contrato sem ninguém perceber.
 
-**Estado:** escrito e válido (`redocly lint`). Todo endpoint tem `operationId`.
+**Estado:** escrito e válido (`redocly lint`, 0 erros; avisos pré-existentes de
+`localhost` em `servers` e de 4xx em `/healthz`/`/readyz`). Todo endpoint tem
+`operationId`.
 
 **OpenAPI 3.0.3, não 3.1**, porque `nullable: true` do 3.0 é o que o contrato já usa, e o
 app trata enum desconhecido como default seguro — um gerador que falha nesse valor
 quebraria versões publicadas.
 
-⚠️ **Falta o guarda automático.** O spec foi conferido campo a campo contra respostas reais
-da API uma vez, na Fase 5 — todos os schemas batem. Mas nada impede a divergência amanhã.
-O teste de snapshot (`test/golden/`) que trava isso ainda não existe; até ele existir, quem
-mexer num DTO precisa mexer no spec na mesma alteração.
+O guarda automático existe: `TestGoldenResponses` trava a forma de cada resposta
+(`test/golden/`), `TestRouterAndOpenAPIAgree` trava path e método contra este spec.
+Quem mexer num DTO mexe no spec na mesma alteração e lê o diff do golden.
 
 ### D-04 — Stack
 
@@ -832,7 +894,7 @@ coluna `date` sem alteração. Modelar essas datas como instantes é de onde vem
 (migration 000006), não por chamadas explícitas em cada módulo.
 
 **Por quê, num projeto que mantém lógica fora do banco:** leituras são escritas por mais de
-um módulo — `vehicle` hoje, `maintenance` agora, `abastecimento` depois — e cada um teria
+um módulo — `vehicle`, `maintenance`, `abastecimento` — e cada um teria
 que lembrar de chamar o mesmo recálculo, na mesma transação, com a mesma ordenação. Quem
 esquecesse não falharia: serviria silenciosamente uma quilometragem velha para o dashboard
 e para todo cálculo de manutenção. É a pior classe de bug possível neste schema.
@@ -1083,16 +1145,20 @@ IPVA, licenciamento, seguro. CRUD puro, sem regra. Rápida.
 
 ### Fase 5 — Read models
 
-`/dashboard`, `/alerts`, `/timeline`. Fecha o MVP-1.
+`/dashboard`, `/alerts`, `/timeline`. Núcleo de leitura do MVP-1.
 
-### Fase 6 — MVP-2
+### Fase 6 — Abastecimento (antecipado para o MVP-1)
 
-Abastecimento → despesas → view `vehicle_costs` → relatório de custo e custo/km →
-anexos → alerta de garantia.
+Implementado. `internal/abastecimento`, consumo por tanque cheio, `tracked_cents`
+congelado sem combustível.
 
-### Fase 7 — Em diante
+### Fase 7 — MVP-2
 
-Push · durabilidade de componente · exportação de histórico · FIPE · transferência.
+Despesas avulsas → anexos → alerta de garantia.
+
+### Fase 8 — Em diante
+
+Push · durabilidade de componente · exportação de histórico · transferência.
 
 ---
 
@@ -1106,5 +1172,6 @@ Push · durabilidade de componente · exportação de histórico · FIPE · tran
    mecânico antes do lançamento — isso é conteúdo, não código.
 3. **Sem offline**, o app falha exatamente no posto e no estacionamento — os momentos
    descritos como principais no `PRODUCT.md`. Risco de produto, já registrado lá.
-4. **Sem combustível, o MVP-1 não pode prometer "custo real do veículo"** — que é o pilar
-   nº 2 do posicionamento. A comunicação do app precisa refletir isso.
+4. **`tracked_cents` não inclui combustível de propósito.** Um app publicado desenha
+   três barras que têm de somar o total exibido. Combustível entra nos campos novos
+   (`abastecimento_cents`, `total_cents`, `categories`). Não "consertar" essa duplicação.

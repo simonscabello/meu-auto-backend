@@ -72,3 +72,88 @@ func TestUnknownApplicabilityProducesNoPlan(t *testing.T) {
 		t.Errorf("inapplicable item = (%q, %v), want (not_applicable, true)", strategy, ok)
 	}
 }
+
+func TestEmptyRequirementAppliesToEveryone(t *testing.T) {
+	t.Parallel()
+
+	got := PowertrainFor(p("eletrico")).Applies("")
+	if got != ApplicabilityYes {
+		t.Errorf("Applies(\"\") = %v, want yes — an empty requirement is brakes, not a guess", got)
+	}
+}
+
+func TestUnknownRequirementIsSilence(t *testing.T) {
+	t.Parallel()
+
+	got := PowertrainFor(p("flex")).Applies("turbo")
+	if got != ApplicabilityUnknown {
+		t.Errorf("Applies(unknown) = %v, want unknown — a data problem must not hide an item", got)
+	}
+}
+
+func TestHasCombustionEngine(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		fuel *string
+		want bool
+	}{
+		{"flex", p("flex"), true},
+		{"diesel", p("diesel"), true},
+		{"hybrid", p("hibrido"), true},
+		{"electric", p("eletrico"), false},
+		{"null", nil, false},
+		{"unknown", p("hidrogenio"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := PowertrainFor(tc.fuel).HasCombustionEngine()
+			if got != tc.want {
+				t.Errorf("HasCombustionEngine() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequirementsByVerdict(t *testing.T) {
+	t.Parallel()
+
+	dieselYes, dieselNo := PowertrainFor(p("diesel")).requirementsByVerdict()
+	if !equalStrings(dieselYes, []string{RequirementCombustion}) {
+		t.Errorf("diesel satisfied = %v, want [combustion]", dieselYes)
+	}
+	if !equalStrings(dieselNo, []string{RequirementSparkIgnition, RequirementHighVoltage}) {
+		t.Errorf("diesel unsatisfied = %v, want [spark_ignition high_voltage]", dieselNo)
+	}
+
+	electricYes, electricNo := PowertrainFor(p("eletrico")).requirementsByVerdict()
+	if !equalStrings(electricYes, []string{RequirementHighVoltage}) {
+		t.Errorf("electric satisfied = %v, want [high_voltage]", electricYes)
+	}
+	if !equalStrings(electricNo, []string{RequirementCombustion, RequirementSparkIgnition}) {
+		t.Errorf("electric unsatisfied = %v, want [combustion spark_ignition]", electricNo)
+	}
+
+	// Silence: a requirement we cannot answer appears in neither list, so the
+	// caller leaves those plans alone. Null and an unknown fuel word are the same.
+	for _, fuel := range []*string{nil, p("hidrogenio")} {
+		yes, no := PowertrainFor(fuel).requirementsByVerdict()
+		if len(yes) != 0 || len(no) != 0 {
+			t.Errorf("unknown powertrain split %v into yes=%v no=%v; both must be empty",
+				fuel, yes, no)
+		}
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

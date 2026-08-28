@@ -129,6 +129,62 @@ func TestUnsortedInputIsWalkedChronologically(t *testing.T) {
 	assertOK(t, got, 20)
 }
 
+func TestSameDaySortsByCreatedAt(t *testing.T) {
+	t.Parallel()
+
+	day := mustDay("2026-01-10")
+	a := Fill{
+		ID: uuid.MustParse("00000000-0000-0000-0000-00000000000a"),
+		OccurredOn: day, CreatedAt: day,
+		MileageKm: 90_000, VolumeMl: 40_000, FullTank: true,
+	}
+	b := Fill{
+		ID: uuid.MustParse("00000000-0000-0000-0000-00000000000b"),
+		OccurredOn: day, CreatedAt: day.Add(time.Hour),
+		MileageKm: 91_000, VolumeMl: 50_000, FullTank: true,
+	}
+
+	got := mustConsumption(t, []Fill{b, a}, b.ID)
+	assertOK(t, got, 20)
+}
+
+func TestSameInstantSortsByID(t *testing.T) {
+	t.Parallel()
+
+	day := mustDay("2026-01-10")
+	a := Fill{
+		ID: uuid.MustParse("00000000-0000-0000-0000-00000000000a"),
+		OccurredOn: day, CreatedAt: day,
+		MileageKm: 90_000, VolumeMl: 40_000, FullTank: true,
+	}
+	b := Fill{
+		ID: uuid.MustParse("00000000-0000-0000-0000-00000000000b"),
+		OccurredOn: day, CreatedAt: day,
+		MileageKm: 91_000, VolumeMl: 50_000, FullTank: true,
+	}
+
+	got := mustConsumption(t, []Fill{b, a}, b.ID)
+	assertOK(t, got, 20)
+}
+
+func TestZeroVolumeBetweenFullTanksIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	a := full("a", "2026-01-01", 90_000, 40_000)
+	b := full("b", "2026-01-10", 91_000, 0)
+
+	got := mustConsumption(t, []Fill{a, b}, b.ID)
+	assertNotOK(t, got, StatusUnavailable)
+}
+
+func mustDay(day string) time.Time {
+	occurredOn, err := time.Parse("2006-01-02", day)
+	if err != nil {
+		panic(err)
+	}
+	return occurredOn
+}
+
 func mustConsumption(t *testing.T, fills []Fill, id uuid.UUID) Consumption {
 	t.Helper()
 	got, ok := ComputeConsumption(fills)[id]

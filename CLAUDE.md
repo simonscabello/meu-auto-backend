@@ -138,13 +138,12 @@ gofmt -l .                           # see the CRLF note below before believing 
 
 ## State of the repo
 
-**MVP-1 complete (phases 0–5).** The foundation is in place (validated config, structured logging, typed domain errors, `apperr → HTTP`, pgx pool, embedded migrations applied on boot, `/healthz` and `/readyz`, CI), plus three domain modules:
+**MVP-1 complete.** Seven domain modules:
 
 - **identity** — `POST /v1/auth/{register,login,refresh,logout}`, `POST /v1/auth/password-reset/{request,confirm}`, `GET|PATCH|DELETE /v1/me`. argon2id passwords, HS256 access tokens with the algorithm pinned, opaque rotating refresh tokens with reuse detection scoped to rotation alone (SPEC.md D-15), rate limiting by e-mail and by IP.
 - **vehicle** — `GET|POST /v1/vehicles`, `GET|PATCH|DELETE /v1/vehicles/{id}`, `GET|POST /v1/vehicles/{id}/odometer`, `DELETE /v1/odometer/{id}`. Ownership-based authorisation, the odometer monotonicity rule, keyset pagination.
-- **maintenance** — `GET|POST /v1/maintenance-items`, `GET|POST /v1/vehicles/{id}/maintenance-plans`, `PATCH|DELETE /v1/maintenance-plans/{id}`, `GET /v1/vehicles/{id}/maintenance-profile`, `POST /v1/vehicles/{id}/maintenance-profile/answers`, `GET|POST /v1/vehicles/{id}/maintenance-records`, `GET|PATCH|DELETE /v1/maintenance-records/{id}`. A seeded catalogue, plans materialised automatically on vehicle creation **and filtered by what the vehicle actually has**, records with line items, and the due engine.
-
-- **obligation** — `GET|POST /v1/vehicles/{id}/obligations`, `PATCH|DELETE /v1/obligations/{id}`, `GET|POST /v1/vehicles/{id}/seguros`, `PATCH|DELETE /v1/seguros/{id}`. IPVA and licenciamento share a table with an explicit `kind`; a seguro has its own, because it is a contract with a period rather than a dated debt.
+- **maintenance** — `GET|POST /v1/maintenance-items`, `GET|POST /v1/vehicles/{id}/maintenance-plans`, `GET|PATCH|DELETE /v1/maintenance-plans/{id}`, `GET /v1/vehicles/{id}/maintenance-profile`, `POST /v1/vehicles/{id}/maintenance-profile/answers`, `GET|POST /v1/vehicles/{id}/maintenance-records`, `GET|PATCH|DELETE /v1/maintenance-records/{id}`. A seeded catalogue, plans materialised automatically on vehicle creation **and filtered by what the vehicle actually has**, records with line items, and the due engine.
+- **obligation** — `GET|POST /v1/vehicles/{id}/obligations`, `GET|PATCH|DELETE /v1/obligations/{id}`, `GET|POST /v1/vehicles/{id}/seguros`, `GET|PATCH|DELETE /v1/seguros/{id}`. IPVA and licenciamento share a table with an explicit `kind`; a seguro has its own, because it is a contract with a period rather than a dated debt.
 - **abastecimento** — `GET|POST /v1/vehicles/{id}/abastecimentos`, `GET|PATCH|DELETE /v1/abastecimentos/{id}`. A fill is a fact, not a plan: it produces an `odometer_reading` with `source = abastecimento` and does not reset any clock. Consumption is computed by `consumption.go` (full-tank to full-tank) and never stored. `GET /v1/vehicles/{id}` carries `refueling` derived from `fuel_type`.
 - **insight** — `GET /v1/vehicles/{id}/{dashboard,alerts,timeline}`. The read model.
 - **catalog** — `GET /v1/vehicle-brands`, `GET /v1/vehicle-brands/{id}/models`, `GET /v1/vehicle-models/{id}/years`, `GET /v1/vehicle-model-years/{id}`. The vehicle catalogue, mirrored from the FIPE table so registration is three dropdowns instead of three free-text fields. **The only module that talks to a third party.**
@@ -167,7 +166,7 @@ gofmt -l .                           # see the CRLF note below before believing 
 
 The quickest check that a deploy carried the code you expect: an unauthenticated request to a route added in that change answers `401` if it is registered and `404` if it is not, and `/readyz` answers `200` only once the pool is up.
 
-**The integration net is in place** (`test/`), which was the gap that had to close before MVP-2 — abastecimento writes into `odometer_readings` and the cost totals, exactly where a silent regression would land.
+**The integration net is in place** (`test/`). Abastecimento is in MVP-1 — it writes into `odometer_readings` and the cost totals, exactly where a silent regression would land.
 
 - **`test/testdb`** gives every test its own database. One container per test binary; the migrations run once into a template, and each test clones it with `CREATE DATABASE ... TEMPLATE`. Cloning rather than truncating is deliberate — see the `TRUNCATE` trap below.
 - **`test/integration`** drives the API over HTTP through the real router, built by `app.New`. There are no database mocks and no fixtures written in SQL: a fixture that inserts directly can build a state the API would have refused.
