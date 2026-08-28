@@ -626,6 +626,85 @@ func (s *Service) UpdateRecord(ctx context.Context, userID, recordID uuid.UUID, 
 	return record, lines, nil
 }
 
+// AddRecordItems appends lines to a record that already exists.
+//
+// The case this is for: a revisão was registered with five items and the brake fluid was
+// forgotten. Before this, the only ways out were to leave the history wrong or to retract
+// the record and type all six lines again — and PATCH deliberately does not touch lines,
+// because *replacing* them means deciding what happens to the clock of everything removed.
+//
+// Appending has no such question. A new line resets its own item from this record, the
+// same as if it had been there all along, and nothing that was already recorded moves.
+//
+// Two refusals, and both are about staying honest rather than about being strict:
+//
+//   - An item already on the record is a conflict, not a second line. Two lines for one
+//     item on one event would double it in every total and say nothing new.
+//   - A record with no mileage is a care-only record. Adding a service to it would assert
+//     a distance the event never carried, and the due engine needs one. The way through
+//     is to give the record its mileage first, which PATCH already does.
+func (s *Service) AddRecordItems(ctx context.Context, userID, recordID uuid.UUID, req addRecordItemsRequest) (db.MaintenanceRecord, []db.ListMaintenanceRecordItemsRow, error) {
+	record, err := s.authorizeRecord(ctx, userID, recordID)
+	if err != nil {
+		return db.MaintenanceRecord{}, nil, err
+	}
+	if err := req.normalizeAndValidate(); err != nil {
+		return db.MaintenanceRecord{}, nil, err
+	}
+
+	existing, err := s.repo.ListRecordItems(ctx, []uuid.UUID{recordID})
+	if err != nil {
+		return db.MaintenanceRecord{}, nil, apperr.Internal(err)
+	}
+
+	onRecord := make(map[uuid.UUID]bool, len(existing))
+	for _, line := range existing {
+		onRecord[line.MaintenanceItemID] = true
+	}
+
+	items, kinds, err := s.buildRecordItems(ctx, userID, req.Items)
+	if err != nil {
+		return db.MaintenanceRecord{}, nil, err
+	}
+
+	for _, item := range items {
+		if onRecord[item.MaintenanceItemID] {
+			return db.MaintenanceRecord{}, nil, apperr.Validation(
+				"Não foi possível adicionar os itens.",
+				map[string]any{"items": "Esse item já está neste registro."})
+		}
+	}
+
+	if len(existing)+len(items) > maxItemsPerRec {
+		return db.MaintenanceRecord{}, nil, apperr.Validation(
+			"Não foi possível adicionar os itens.",
+			map[string]any{"items": "Itens demais em um único registro."})
+	}
+
+	// Not errIfMileageMissing: that one attaches its message to a mileage_km field, and
+	// there is no mileage field on this request to attach it to. The way through is on
+	// the record, so the sentence says so.
+	if record.MileageKm == nil && recordRequiresMileage(kinds) {
+		return db.MaintenanceRecord{}, nil, apperr.Validation(
+			"Não foi possível adicionar os itens.",
+			map[string]any{"items": "Este registro não tem quilometragem, e um serviço precisa de uma. Edite o registro para informá-la antes."})
+	}
+
+	if err := s.repo.AddRecordItems(ctx, recordID, items); err != nil {
+		return db.MaintenanceRecord{}, nil, apperr.Internal(err)
+	}
+
+	updated, err := s.repo.RecordForUser(ctx, recordID, userID)
+	if err != nil {
+		return db.MaintenanceRecord{}, nil, apperr.Internal(err)
+	}
+	lines, err := s.repo.ListRecordItems(ctx, []uuid.UUID{recordID})
+	if err != nil {
+		return db.MaintenanceRecord{}, nil, apperr.Internal(err)
+	}
+	return updated, lines, nil
+}
+
 func (s *Service) DeleteRecord(ctx context.Context, userID, recordID uuid.UUID) error {
 	if _, err := s.authorizeRecord(ctx, userID, recordID); err != nil {
 		return err

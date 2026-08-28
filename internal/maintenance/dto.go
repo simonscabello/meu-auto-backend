@@ -335,19 +335,31 @@ func (r *createRecordRequest) normalizeAndValidate(today time.Time) error {
 		errs.Add("total_cost_cents", "Valor inválido.")
 	}
 
-	// At least one line is required. A record naming no item resets no clock and belongs
-	// to no plan — it would be a cost with no meaning to the engine. The catalogue's
-	// "Manutenção personalizada" is the escape hatch for anything unnamed.
+	validateRecordItems(errs, r.Items)
+
+	return errs.Err("Não foi possível registrar a manutenção.")
+}
+
+// validateRecordItems checks a batch of lines, in place.
+//
+// Shared by the two ways lines arrive: with a new record, and appended to one that
+// already exists. The rules are the same either way, and having written them twice is
+// how the two paths start disagreeing about what a valid warranty is.
+//
+// At least one line is required. A record naming no item resets no clock and belongs to
+// no plan — it would be a cost with no meaning to the engine. The catalogue's
+// "Manutenção personalizada" is the escape hatch for anything unnamed.
+func validateRecordItems(errs validate.Errors, items []recordItemRequest) {
 	switch {
-	case len(r.Items) == 0:
+	case len(items) == 0:
 		errs.Add("items", "Informe ao menos um item de manutenção.")
-	case len(r.Items) > maxItemsPerRec:
+	case len(items) > maxItemsPerRec:
 		errs.Add("items", "Itens demais em um único registro.")
 	}
 
-	seen := make(map[string]bool, len(r.Items))
-	for i := range r.Items {
-		item := &r.Items[i]
+	seen := make(map[string]bool, len(items))
+	for i := range items {
+		item := &items[i]
 
 		if strings.TrimSpace(item.MaintenanceItemID) == "" {
 			errs.Add("items", "Cada item precisa de um maintenance_item_id.")
@@ -371,8 +383,25 @@ func (r *createRecordRequest) normalizeAndValidate(today time.Time) error {
 			errs.Add("items", "Garantia em quilômetros inválida.")
 		}
 	}
+}
 
-	return errs.Err("Não foi possível registrar a manutenção.")
+// addRecordItemsRequest appends lines to a record that already exists.
+//
+// Adding only. Removing a line is a separate decision — what happens to the clock of the
+// item that was taken off — and it is not answered by this endpoint. Someone who named
+// the wrong service retracts the record and writes it again.
+//
+// Nothing about the event itself is touched here: no date, no mileage, no total. A
+// forgotten brake fluid is a line that was missing from a service that happened, not a
+// second service.
+type addRecordItemsRequest struct {
+	Items []recordItemRequest `json:"items"`
+}
+
+func (r *addRecordItemsRequest) normalizeAndValidate() error {
+	errs := validate.New()
+	validateRecordItems(errs, r.Items)
+	return errs.Err("Não foi possível adicionar os itens.")
 }
 
 // recordRequiresMileage reports whether any resolved catalogue kind is a service

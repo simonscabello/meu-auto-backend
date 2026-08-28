@@ -941,6 +941,8 @@ paths:
       description: |
         Altera data, quilometragem, oficina, valor e observação. **Não altera as linhas de
         item** — trocar item a item exige decidir o que acontece com o relógio dos removidos.
+        Acrescentar uma linha que faltou é seguro e tem endpoint próprio:
+        `POST /v1/maintenance-records/{recordId}/items`.
 
         Mudar data ou quilometragem move a leitura de odômetro gerada por este registro, e
         passa pela mesma validação de consistência. Envie `source: "correction"` para pular
@@ -971,6 +973,50 @@ paths:
         "204": { description: Manutenção retratada }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/maintenance-records/{recordId}/items:
+    parameters:
+      - name: recordId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: addMaintenanceRecordItems
+      tags: [manutencao]
+      summary: Acrescentar itens a uma manutenção
+      description: |
+        Para o caso que existe de verdade: a revisão foi registrada com cinco itens e o
+        fluido de freio ficou de fora. Antes, as saídas eram deixar o histórico errado ou
+        retratar o registro e digitar as seis linhas de novo.
+
+        **Só acrescenta.** Remover uma linha exige decidir o que acontece com o relógio do
+        item retirado, e essa decisão não está tomada — quem nomeou o serviço errado
+        retrata o registro e escreve de novo. É por isso que isto é um sub-recurso e não um
+        campo no PATCH: acrescentar é seguro, substituir a lista não é.
+
+        Nada do evento muda: nem data, nem quilometragem, nem valor total. A leitura de
+        odômetro já foi criada quando o registro nasceu e continua onde está. Cada linha
+        nova zera o relógio do seu próprio item a partir **deste** registro, exatamente como
+        teria zerado se estivesse lá desde o começo.
+
+        Recusa em dois casos: um item que já está no registro (seria a mesma coisa contada
+        duas vezes) e um serviço acrescentado a um registro sem quilometragem — um registro
+        só de cuidado não afirma distância nenhuma, e o motor de vencimento precisa de uma.
+        Informe a quilometragem pelo PATCH antes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddMaintenanceRecordItemsRequest" }
+      responses:
+        "200":
+          description: O registro completo, já com as linhas novas
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceRecord" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
 
   # ---------------------------------------------------------------- prazos
   /v1/vehicles/{vehicleId}/obligations:
@@ -2272,9 +2318,25 @@ components:
             Pelo menos um item. O mesmo item não pode aparecer duas vezes no mesmo registro.
           items: { $ref: "#/components/schemas/MaintenanceRecordItemRequest" }
 
+    AddMaintenanceRecordItemsRequest:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 20
+          description: |
+            As linhas a acrescentar. O mesmo item não pode aparecer duas vezes na
+            requisição nem já estar no registro, e o total (as que já existem mais estas)
+            respeita o limite de 20.
+          items: { $ref: "#/components/schemas/MaintenanceRecordItemRequest" }
+
     UpdateMaintenanceRecordRequest:
       type: object
-      description: Não altera as linhas de item.
+      description: |
+        Não altera as linhas de item. Para acrescentar uma que faltou, use
+        `POST /v1/maintenance-records/{recordId}/items`.
       properties:
         occurred_on: { type: string, format: date, nullable: true }
         mileage_km: { type: integer, format: int32, nullable: true, minimum: 0 }
@@ -2654,6 +2716,13 @@ components:
                 Planos cujo item nunca foi registrado, então não há de onde medir. É pedido
                 de configuração, não prazo — por isso é contado aqui e **não** aparece em
                 `items` nem em `/alerts`.
+
+                Conta apenas o que dá para **perguntar**: além de estar sem baseline e sem
+                resposta (`history_status = not_asked`), o item do catálogo precisa ter
+                `history_question`. O app não inventa pergunta nenhuma, então contar um item
+                sem pergunta significaria prometer três perguntas e abrir o fluxo com uma.
+                Item sem pergunta continua acessível pelo caminho normal, registrando o
+                serviço.
             items:
               type: array
               description: Apenas os mais urgentes. A lista completa está em `/alerts`.

@@ -392,6 +392,35 @@ func (r *Repository) CreateRecord(
 	return record, created, nil
 }
 
+// AddRecordItems appends lines to a record that already exists.
+//
+// One transaction, and no odometer write: the event already produced its reading when it
+// was created, and the date and mileage it asserts are untouched by naming one more thing
+// that was done at the same time. The new line resets its own item's clock from this
+// record, which is exactly what it means to have forgotten to write it down.
+//
+// updated_at moves, because the record did change.
+func (r *Repository) AddRecordItems(
+	ctx context.Context,
+	recordID uuid.UUID,
+	items []db.CreateMaintenanceRecordItemParams,
+) error {
+	return r.inTx(ctx, func(q *db.Queries) error {
+		for _, item := range items {
+			item.MaintenanceRecordID = recordID
+			if _, err := q.CreateMaintenanceRecordItem(ctx, item); err != nil {
+				return fmt.Errorf("add maintenance record item: %w", err)
+			}
+		}
+		if _, err := q.UpdateMaintenanceRecord(ctx, db.UpdateMaintenanceRecordParams{
+			ID: recordID,
+		}); err != nil {
+			return fmt.Errorf("touch maintenance record: %w", err)
+		}
+		return nil
+	})
+}
+
 func (r *Repository) RecordForUser(ctx context.Context, recordID, userID uuid.UUID) (db.MaintenanceRecord, error) {
 	record, err := r.queries.GetMaintenanceRecordForUser(ctx, db.GetMaintenanceRecordForUserParams{
 		ID: recordID, UserID: userID,

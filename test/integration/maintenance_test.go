@@ -402,6 +402,37 @@ func fieldMessage(t *testing.T, res *response, field string) string {
 	return msg
 }
 
+// plannedItemIDs returns n catalogue item ids the vehicle actually has a plan for, taken
+// from the vehicle's own list rather than from the catalogue.
+//
+// Only kind = maintenance: a care plan carries no distance of its own, and every caller
+// here asserts something about mileage.
+func (u *user) plannedItemIDs(vehicleID string, n int) []string {
+	u.t.Helper()
+
+	var body struct {
+		Data []struct {
+			MaintenanceItemID string `json:"maintenance_item_id"`
+			ItemKind          string `json:"item_kind"`
+		} `json:"data"`
+	}
+	u.get(fmt.Sprintf("/v1/vehicles/%s/maintenance-plans", vehicleID)).
+		expect(http.StatusOK).decode(&body)
+
+	out := make([]string, 0, n)
+	for _, plan := range body.Data {
+		if plan.ItemKind != "maintenance" {
+			continue
+		}
+		out = append(out, plan.MaintenanceItemID)
+		if len(out) == n {
+			return out
+		}
+	}
+	u.t.Fatalf("vehicle %s has %d maintenance plans, need %d", vehicleID, len(out), n)
+	return nil
+}
+
 func (u *user) catalogueIDs(n int) []string {
 	u.t.Helper()
 
@@ -420,4 +451,127 @@ func (u *user) catalogueIDs(n int) []string {
 		out = append(out, item.ID)
 	}
 	return out
+}
+
+// TestForgottenItemIsAppendedWithoutRewritingTheRecord covers the gap that made people
+// retract a good record: a revisão saved with five items, and the brake fluid remembered
+// afterwards. PATCH deliberately does not touch lines, so before this the only ways out
+// were to leave the history wrong or to delete and type all six again.
+//
+// The two things the append must NOT do are what the assertions are for: it must not move
+// the odometer reading the record already produced, and it must reset the new item's clock
+// from this record, exactly as if the line had been there all along.
+func TestForgottenItemIsAppendedWithoutRewritingTheRecord(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+
+	u := e.newUser()
+	vehicleID := u.createVehicle(map[string]any{"current_mileage_km": 50_000})
+
+	// From the vehicle's own plans, not from the catalogue: a catalogue item the car
+	// does not have is a legal record line but has no plan to grow a baseline, and the
+	// assertion below is about the baseline.
+	items := u.plannedItemIDs(vehicleID, 2)
+	recordID := u.post(fmt.Sprintf("/v1/vehicles/%s/maintenance-records", vehicleID),
+		map[string]any{
+			"occurred_on": e.today().Format(time.DateOnly),
+			"mileage_km":  60_000,
+			"kind":        "performed",
+			"items":       []map[string]any{{"maintenance_item_id": items[0]}},
+		}).expect(http.StatusCreated).id()
+
+	readings := e.countRows(t,
+		`SELECT count(*) FROM odometer_readings WHERE vehicle_id = $1`,
+		uuid.MustParse(vehicleID))
+
+	if u.planForItem(vehicleID, items[1]).hasBaseline() {
+		t.Fatal("the second item had a baseline before it was ever recorded")
+	}
+
+	body := u.post("/v1/maintenance-records/"+recordID+"/items", map[string]any{
+		"items": []map[string]any{{"maintenance_item_id": items[1]}},
+	}).expect(http.StatusOK).json()
+
+	lines, _ := body["items"].([]any)
+	if len(lines) != 2 {
+		t.Fatalf("the record came back with %d lines, want 2", len(lines))
+	}
+
+	// The event did not happen twice. Adding a line names one more thing that was done at
+	// the same time; the reading it asserted is the same reading.
+	if after := e.countRows(t,
+		`SELECT count(*) FROM odometer_readings WHERE vehicle_id = $1`,
+		uuid.MustParse(vehicleID)); after != readings {
+		t.Errorf("appending a line wrote %d extra odometer readings", after-readings)
+	}
+	if km := u.currentMileage(vehicleID); km != 60_000 {
+		t.Errorf("appending a line moved current_mileage_km to %d", km)
+	}
+
+	plan := u.planForItem(vehicleID, items[1])
+	if !plan.hasBaseline() {
+		t.Error("the appended item still reports no baseline")
+	}
+	if plan.LastMileageKm == nil || *plan.LastMileageKm != 60_000 {
+		t.Errorf("the appended item counts from %v, want the record's 60000",
+			plan.LastMileageKm)
+	}
+}
+
+// TestAppendingAnItemAlreadyOnTheRecordIsRefused: two lines for one item on one event
+// would double it in every total and say nothing new.
+func TestAppendingAnItemAlreadyOnTheRecordIsRefused(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+
+	u := e.newUser()
+	vehicleID := u.createVehicle(map[string]any{"current_mileage_km": 50_000})
+
+	itemID := u.firstItemID()
+	recordID := u.post(fmt.Sprintf("/v1/vehicles/%s/maintenance-records", vehicleID),
+		map[string]any{
+			"occurred_on": e.today().Format(time.DateOnly),
+			"mileage_km":  60_000,
+			"kind":        "performed",
+			"items":       []map[string]any{{"maintenance_item_id": itemID}},
+		}).expect(http.StatusCreated).id()
+
+	u.post("/v1/maintenance-records/"+recordID+"/items", map[string]any{
+		"items": []map[string]any{{"maintenance_item_id": itemID}},
+	}).expectError(http.StatusUnprocessableEntity, "validation_failed")
+
+	if n := e.countRows(t,
+		`SELECT count(*) FROM maintenance_record_items WHERE maintenance_record_id = $1`,
+		uuid.MustParse(recordID)); n != 1 {
+		t.Errorf("the refused append left the record with %d lines, want 1", n)
+	}
+}
+
+// TestAppendingAServiceToACareRecordIsRefused: a care-only record asserts no distance
+// (RN-03), and a service needs one. Inventing it here from the odometer cache is exactly
+// the shortcut that rule exists to forbid.
+func TestAppendingAServiceToACareRecordIsRefused(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+
+	u := e.newUser()
+	vehicleID := u.createVehicle(map[string]any{"current_mileage_km": 50_000})
+
+	careID := u.itemIDByKind("care")
+	recordID := u.post(fmt.Sprintf("/v1/vehicles/%s/maintenance-records", vehicleID),
+		map[string]any{
+			"occurred_on": e.today().Format(time.DateOnly),
+			"kind":        "performed",
+			"items":       []map[string]any{{"maintenance_item_id": careID}},
+		}).expect(http.StatusCreated).id()
+
+	res := u.post("/v1/maintenance-records/"+recordID+"/items", map[string]any{
+		"items": []map[string]any{{"maintenance_item_id": u.itemIDByKind("maintenance")}},
+	}).expectError(http.StatusUnprocessableEntity, "validation_failed")
+
+	// The sentence has to point at the record, because there is no mileage field on this
+	// request for a field-level error to attach to.
+	if msg := fieldMessage(t, res, "items"); msg == "" {
+		t.Error("the refusal carries no message on items")
+	}
 }

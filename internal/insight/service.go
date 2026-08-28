@@ -2,6 +2,7 @@ package insight
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -248,15 +249,27 @@ func (s *Service) Dashboard(ctx context.Context, userID, vehicleID uuid.UUID, co
 	sortAlerts(alerts)
 
 	// Counted, not listed: a vehicle created today has one of these per suggested plan, and
-	// the app shows them as a single "complete o histórico" prompt.
+	// the client shows them as a single group rather than as a dozen alerts.
 	//
-	// A plan the owner already answered "não sei" about is NOT counted. The prompt is meant
-	// to disappear once it has been addressed, and "I do not remember" is an answer — the
-	// old behaviour kept it on screen forever, which is how a helpful nudge becomes noise.
+	// Three conditions, and each one removes a number that would be a lie:
+	//
+	//   - no baseline, so there is genuinely nothing to count from;
+	//   - nobody has been asked. A plan the owner already answered "não sei" about is NOT
+	//     counted: the prompt has to disappear once it has been dealt with, and "I do not
+	//     remember" is an answer. The old behaviour kept it on screen forever, which is how
+	//     a helpful nudge becomes noise;
+	//   - the catalogue wrote a question for it. This is the one that was missing, and it
+	//     produced the bug this count is named for: the app asks only what the catalogue
+	//     gave it wording for — it invents no question of its own — so counting the items
+	//     with no question meant the screen promised three questions and the flow opened
+	//     with one. An item with no question is not unasked; it is unaskable, and reachable
+	//     the ordinary way, by registering the service.
 	needsBaseline := 0
 	for _, due := range dues {
 		if due.Status == maintenance.StatusNoBaseline &&
-			due.Plan.HistoryStatus == maintenance.HistoryNotAsked {
+			due.Plan.HistoryStatus == maintenance.HistoryNotAsked &&
+			due.Plan.HistoryQuestion != nil &&
+			strings.TrimSpace(*due.Plan.HistoryQuestion) != "" {
 			needsBaseline++
 		}
 	}

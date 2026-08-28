@@ -5,7 +5,7 @@
     "due_at_km": "null",
     "due_on": "null",
     "history_priority": "number",
-    "history_question": "null",
+    "history_question": "string",
     "history_status": "string",
     "id": "string",
     "interval_days": "null",

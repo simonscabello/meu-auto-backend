@@ -51,6 +51,11 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Get("/maintenance-records/{recordID}", h.getRecord)
 		r.Patch("/maintenance-records/{recordID}", h.updateRecord)
 		r.Delete("/maintenance-records/{recordID}", h.deleteRecord)
+
+		// A sub-resource rather than a field on PATCH: appending a line is safe and
+		// replacing the list is not, and one endpoint that does both would have to be
+		// documented as "sometimes destructive".
+		r.Post("/maintenance-records/{recordID}/items", h.addRecordItems)
 	})
 }
 
@@ -343,6 +348,29 @@ func (h *Handler) updateRecord(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, err)
 		return
 	}
+	httpx.JSON(w, r, http.StatusOK, toRecordResponse(record, items))
+}
+
+func (h *Handler) addRecordItems(w http.ResponseWriter, r *http.Request) {
+	userID, recordID, err := callerAndRecord(r)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+
+	req, err := httpx.DecodeBody[addRecordItemsRequest](r)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+
+	record, items, err := h.service.AddRecordItems(r.Context(), userID, recordID, req)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	// The whole record, not just the lines that were added: the caller is showing the
+	// record, and a partial answer would leave it stitching two shapes together.
 	httpx.JSON(w, r, http.StatusOK, toRecordResponse(record, items))
 }
 

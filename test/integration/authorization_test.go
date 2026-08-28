@@ -204,6 +204,15 @@ func protectedRoutes() []protectedRoute {
 		{http.MethodDelete, "/v1/maintenance-records/{recordID}",
 			func(f *ownedResources) string { return "/v1/maintenance-records/" + f.recordID },
 			nil, hiddenFromStrangers},
+		{http.MethodPost, "/v1/maintenance-records/{recordID}/items",
+			func(f *ownedResources) string {
+				return "/v1/maintenance-records/" + f.recordID + "/items"
+			},
+			func(f *ownedResources) any {
+				return map[string]any{
+					"items": []map[string]any{{"maintenance_item_id": f.itemID}},
+				}
+			}, hiddenFromStrangers},
 
 		// ---------- obligation ----------
 		{http.MethodGet, "/v1/vehicles/{vehicleID}/obligations",
