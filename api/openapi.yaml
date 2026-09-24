@@ -752,6 +752,15 @@ paths:
       description: |
         Se nenhum intervalo for informado, os padrões do item no catálogo são usados —
         criar um plano pode ser só nomear o item.
+
+        **Um plano desativado antes volta.** `(veículo, item)` é único, então adicionar de
+        novo um item que o dono desligou **reativa** a mesma linha, com os intervalos e o
+        `id` deste pedido, em vez de responder `409` para sempre. O histórico do item não é
+        tocado — ele pende do item, não do plano.
+
+        **Idempotente pelo `id`.** Reenviar o mesmo pedido (mesmo `id`) devolve `201` com o
+        plano que ele já criou. Um plano ativo para o item com **outro** `id` continua sendo
+        `409`.
       requestBody:
         required: true
         content:
@@ -872,6 +881,11 @@ paths:
         Devolve o perfil inteiro, não só a resposta: uma resposta muda quais planos existem,
         e obrigar o app a buscar de novo deixaria uma janela em que a tela e o servidor
         discordam.
+
+        Uma pergunta sobre um componente que o veículo **não pode ter** — correia dentada num
+        elétrico — é recusada com `422` (`question_id`), em vez de criar o plano que a
+        pergunta existe para evitar. Veículo sem combustível informado não é recusado: o dono
+        pode saber mais do que nós.
       requestBody:
         required: true
         content:
@@ -1079,7 +1093,12 @@ paths:
       operationId: createObligation
       tags: [prazos]
       summary: Registrar IPVA ou licenciamento
-      description: Um por tipo por ano de referência — um segundo é duplicata, não um segundo tributo.
+      description: |
+        Um por tipo por ano de referência — um segundo é duplicata, não um segundo tributo.
+
+        Idempotente pelo `id`: reenviar o mesmo pedido devolve `201` com o registro que ele
+        já criou, em vez de dizer ao dono que ele "já tem um IPVA" — o próprio, salvo por uma
+        primeira tentativa cuja resposta se perdeu. Outro `id` para o mesmo ano continua `409`.
       requestBody:
         required: true
         content:
@@ -2224,8 +2243,27 @@ components:
           type: string
           format: date
           nullable: true
-          description: Data do último registro deste item. `null` quando `status` é `sem_baseline`.
+          description: |
+            Data do último registro deste item. `null` quando não há registro — `status`
+            `sem_baseline`, ou `baseline` `since_new`.
         last_mileage_km: { type: integer, format: int32, nullable: true }
+        baseline:
+          type: string
+          nullable: true
+          enum: [record, since_new, null]
+          description: |
+            De onde o vencimento acima é medido.
+
+            - `record` — do último registro do item (`last_occurred_on`, `last_mileage_km`).
+            - `since_new` — o dono disse que **nunca foi feito** (`history_status = never`),
+              então o item roda desde que o carro era novo: 0 km e, quando se sabe o ano, 1º de
+              janeiro do ano de fabricação (ou do ano anterior ao ano-modelo). Sem ano, a
+              dimensão de tempo não é avaliada. Nada é gravado: é derivado da resposta a cada
+              leitura, e um registro do serviço sempre vence a suposição.
+            - `null` — não há de onde medir (`sem_baseline`).
+
+            Campo novo e aditivo. Um app antigo o ignora; o que ele vê é o status e os
+            restantes, agora calculados para um item "nunca feito" em vez de ficarem mudos.
 
     MaintenanceProfileStatus:
       type: string
@@ -2699,12 +2737,26 @@ components:
           description: |
             Dias até o fim da vigência; negativo quando já acabou. Para uma apólice `futuro`,
             conta até o **início**.
+        renewed:
+          type: boolean
+          description: |
+            `true` quando outra apólice do mesmo veículo assumiu depois desta — emendada no dia
+            seguinte ao fim, ou já em vigor. O `status` continua o das datas (uma apólice antiga
+            é `vencido`); este campo é o que permite ao app dizer "renovado" em vez de "o carro
+            está sem cobertura". Uma renovação que ainda não começou, depois de um intervalo,
+            não conta: até ela começar o carro está mesmo sem seguro.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
     # ------------------------------------------------------------ telas
     Alert:
       type: object
+      description: |
+        Algo que pede ação. A lista vem ordenada: vencidos primeiro e, dentro de cada
+        gravidade, o mais adiantado no **próprio** intervalo — uma troca de óleo 41.000 km
+        atrasada vem antes de uma calibragem que vence hoje. Garantias já expiradas e apólices
+        que outra já renovou não são alertas. `subtitle` explica de onde um item "nunca feito"
+        é contado ("Nunca feito, contando desde novo").
       required: [kind, severity, title, reference_type, reference_id]
       properties:
         kind: { $ref: "#/components/schemas/AlertKind" }
@@ -2743,10 +2795,18 @@ components:
             recorded_on: { type: string, format: date, nullable: true }
         alerts:
           type: object
-          required: [overdue, due_soon, needs_baseline, items]
+          required: [overdue, due_soon, needs_baseline, unknown_history, items]
           properties:
             overdue: { type: integer }
             due_soon: { type: integer }
+            unknown_history:
+              type: integer
+              description: |
+                Itens de manutenção (não os cuidados do dia a dia) cujo próximo vencimento não
+                dá para calcular porque ninguém sabe quando foram feitos pela última vez —
+                **incluindo** os que o dono já respondeu "não sei", que `needs_baseline` deixa
+                de contar. É o número que o veredito lê: sem nada vencido e com uma dúzia de
+                itens desconhecidos, "tudo em dia" seria uma afirmação sem base.
             needs_baseline:
               type: integer
               description: |
@@ -2790,6 +2850,19 @@ components:
             vence e não pede ação.
           allOf:
             - $ref: "#/components/schemas/DashboardLastAbastecimento"
+        upcoming:
+          type: array
+          maxItems: 3
+          description: |
+            O que vem a seguir entre as coisas que estão **em dia**: manutenção em dia, IPVA
+            ou licenciamento ainda longe (`pendente`), apólice vigente. No máximo três, o mais
+            adiantado no próprio intervalo primeiro — a mesma medida que ordena os alertas.
+            Cuidados do dia a dia ficam de fora (uma calibragem a cada 15 dias tomaria a lista
+            inteira), e apólices já renovadas também. Nunca `null`.
+
+            Responde a outra metade de "o que preciso fazer agora e o que pode esperar": antes,
+            um carro sem nada vencido mostrava um veredito e mais nada.
+          items: { $ref: "#/components/schemas/UpcomingItem" }
         costs:
           type: object
           required:
@@ -2819,6 +2892,27 @@ components:
             categories:
               type: array
               items: { $ref: "#/components/schemas/CostCategory" }
+
+    UpcomingItem:
+      type: object
+      description: |
+        Mesmo formato de `Alert`, com `severity` sempre `em_dia`. É um schema à parte para que
+        `AlertSeverity` continue com os dois valores em que um app instalado confia: um item
+        aqui não pede ação, só diz o que vem depois.
+      required: [kind, severity, title, reference_type, reference_id]
+      properties:
+        kind: { $ref: "#/components/schemas/AlertKind" }
+        severity: { type: string, enum: [em_dia] }
+        title: { type: string }
+        subtitle: { type: string, nullable: true }
+        due_on: { type: string, format: date, nullable: true }
+        due_at_km: { type: integer, format: int32, nullable: true }
+        remaining_days: { type: integer, format: int32, nullable: true }
+        remaining_km: { type: integer, format: int32, nullable: true }
+        reference_type:
+          type: string
+          enum: [maintenance_plan, obligation, seguro]
+        reference_id: { type: string, format: uuid }
 
     DashboardLastAbastecimento:
       type: object
@@ -2862,13 +2956,16 @@ components:
           type: string
           nullable: true
           description: |
-            Oficina numa manutenção, origem numa leitura de odômetro, combustível num
-            abastecimento, ano de referência num débito.
+            Oficina numa manutenção, "Correção" numa leitura de odômetro corrigida (`null` numa
+            leitura comum), combustível num abastecimento, ano de referência num débito.
         amount_cents:
           type: integer
           format: int64
           nullable: true
-          description: '`null` numa leitura de odômetro — não envolve dinheiro.'
+          description: |
+            Numa manutenção, o total digitado ou, sem total, a soma das linhas. Num débito
+            pago, o valor pago ou, sem ele, o valor devido. `null` numa leitura de odômetro —
+            não envolve dinheiro.
         mileage_km:
           type: integer
           format: int32

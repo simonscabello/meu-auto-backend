@@ -28,10 +28,20 @@ type VehiclePort interface {
 	// the owner never said, which resolves to "unknown" and never to a guess.
 	AuthorizeVehicleForPlanning(ctx context.Context, userID, vehicleID uuid.UUID) (vehicleType string, fuelType *string, currentMileageKm int32, err error)
 
+	// AuthorizeVehicleForDue is the same authorisation with what the due engine needs: the
+	// fuel, the mileage, and the year the car was built — the last one only so that
+	// "nunca foi feito" can count from the car being new.
+	AuthorizeVehicleForDue(ctx context.Context, userID, vehicleID uuid.UUID) (fuelType *string, currentMileageKm int32, builtYear *int32, err error)
+
 	// CheckOdometerConsistency applies SPEC.md RN-01 to a mileage a maintenance record is
 	// about to assert. Shared rather than reimplemented, so there is one definition of
 	// what a valid odometer history looks like.
 	CheckOdometerConsistency(ctx context.Context, vehicleID uuid.UUID, occurredOn time.Time, mileageKm int32) error
+
+	// CheckOdometerConsistencyForEdit is the same rule for a record moving the reading it
+	// already produced. sourceID is the record's id, so its own old value is not quoted
+	// back as the conflicting neighbour.
+	CheckOdometerConsistencyForEdit(ctx context.Context, vehicleID uuid.UUID, occurredOn time.Time, mileageKm int32, sourceID uuid.UUID) error
 }
 
 // Service holds the maintenance rules. It is the only layer here that builds apperr
@@ -117,16 +127,16 @@ func (s *Service) InitializeVehiclePlans(ctx context.Context, vehicleID uuid.UUI
 // greyed-out row. Only the configuration surface passes true, because undoing has to be
 // possible.
 func (s *Service) ListPlans(ctx context.Context, userID, vehicleID uuid.UUID, includeNotApplicable bool) ([]Due, error) {
-	_, _, currentMileageKm, err := s.vehicle.AuthorizeVehicleForPlanning(ctx, userID, vehicleID)
+	_, currentMileageKm, builtYear, err := s.vehicle.AuthorizeVehicleForDue(ctx, userID, vehicleID)
 	if err != nil {
 		return nil, err
 	}
-	return s.listPlans(ctx, vehicleID, currentMileageKm, includeNotApplicable)
+	return s.listPlans(ctx, vehicleID, currentMileageKm, builtYear, includeNotApplicable)
 }
 
 // listPlans is the authorised half, split out so Profile can reuse it after a single
 // authorisation rather than paying for a second one.
-func (s *Service) listPlans(ctx context.Context, vehicleID uuid.UUID, currentMileageKm int32, includeNotApplicable bool) ([]Due, error) {
+func (s *Service) listPlans(ctx context.Context, vehicleID uuid.UUID, currentMileageKm int32, builtYear *int32, includeNotApplicable bool) ([]Due, error) {
 	rows, err := s.repo.ListPlans(ctx, vehicleID, includeNotApplicable)
 	if err != nil {
 		return nil, apperr.Internal(err)
@@ -142,15 +152,54 @@ func (s *Service) listPlans(ctx context.Context, vehicleID uuid.UUID, currentMil
 		plans = append(plans, planFromListed(row))
 	}
 
-	return ComputeAll(plans, lastByItem, currentMileageKm, s.today()), nil
+	return ComputeAll(plans, withSinceNewBaselines(plans, lastByItem, builtYear), currentMileageKm, s.today()), nil
+}
+
+// withSinceNewBaselines fills in the baseline "nunca foi feito" implies, for every plan
+// the owner answered that way and that has no record.
+//
+// A record always wins: somebody who said "never" and then registered the service has a
+// real date and a real mileage, and those are what the next due is measured from. The
+// answer is only read while there is nothing better.
+func withSinceNewBaselines(plans []Plan, lastByItem map[uuid.UUID]Performed, builtYear *int32) map[uuid.UUID]Performed {
+	out, copied := lastByItem, false
+	for _, plan := range plans {
+		if plan.HistoryStatus != HistoryNever {
+			continue
+		}
+		if _, recorded := lastByItem[plan.ItemID]; recorded {
+			continue
+		}
+		if !copied {
+			// Copy on first write: the map came from the repository, and a caller holding
+			// it must not see baselines it did not ask for.
+			out = make(map[uuid.UUID]Performed, len(lastByItem)+1)
+			for id, performed := range lastByItem {
+				out[id] = performed
+			}
+			copied = true
+		}
+		out[plan.ItemID] = SinceNewBaseline(builtYear)
+	}
+	return out
 }
 
 // GetPlan returns one plan with its computed due state, including a plan marked
 // not_applicable — a deep link and the profile screen both need to read one by id.
 func (s *Service) GetPlan(ctx context.Context, userID, planID uuid.UUID) (Due, error) {
-	row, currentMileageKm, err := s.authorizePlan(ctx, userID, planID)
+	// Authorised here rather than through authorizePlan, because this one caller also
+	// needs what the due engine needs about the vehicle and one round trip covers both.
+	row, err := s.repo.PlanByID(ctx, planID)
+	switch {
+	case errors.Is(err, ErrPlanNotFound):
+		return Due{}, errPlanNotFound()
+	case err != nil:
+		return Due{}, apperr.Internal(err)
+	}
+	_, currentMileageKm, builtYear, err := s.vehicle.AuthorizeVehicleForDue(ctx, userID, row.VehicleID)
 	if err != nil {
-		return Due{}, err
+		// Not the caller's vehicle, so not the caller's plan either.
+		return Due{}, errPlanNotFound()
 	}
 
 	lastByItem, err := s.repo.LastPerformedByItem(ctx, row.VehicleID)
@@ -158,11 +207,14 @@ func (s *Service) GetPlan(ctx context.Context, userID, planID uuid.UUID) (Due, e
 		return Due{}, apperr.Internal(err)
 	}
 
+	plan := planFromLoaded(row)
+	lastByItem = withSinceNewBaselines([]Plan{plan}, lastByItem, builtYear)
+
 	var last *Performed
 	if performed, ok := lastByItem[row.MaintenanceItemID]; ok {
 		last = &performed
 	}
-	return ComputeDue(planFromLoaded(row), last, currentMileageKm, s.today()), nil
+	return ComputeDue(plan, last, currentMileageKm, s.today()), nil
 }
 
 func planFromListed(row db.ListMaintenancePlansForVehicleRow) Plan {
@@ -214,12 +266,12 @@ func planFromLoaded(row db.GetMaintenancePlanRow) Plan {
 // It reads the plans INCLUDING the not-applicable ones, because it is the one caller that
 // has to count them and offer to undo one.
 func (s *Service) Profile(ctx context.Context, userID, vehicleID uuid.UUID) (Profile, error) {
-	_, fuelType, currentMileageKm, err := s.vehicle.AuthorizeVehicleForPlanning(ctx, userID, vehicleID)
+	fuelType, currentMileageKm, builtYear, err := s.vehicle.AuthorizeVehicleForDue(ctx, userID, vehicleID)
 	if err != nil {
 		return Profile{}, err
 	}
 
-	dues, err := s.listPlans(ctx, vehicleID, currentMileageKm, true)
+	dues, err := s.listPlans(ctx, vehicleID, currentMileageKm, builtYear, true)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -240,13 +292,23 @@ func (s *Service) Profile(ctx context.Context, userID, vehicleID uuid.UUID) (Pro
 // indistinguishable from never having asked, which is how the old flow ended up asking the
 // same thing forever.
 func (s *Service) AnswerProfileQuestion(ctx context.Context, userID, vehicleID uuid.UUID, req answerProfileRequest) (Profile, error) {
-	if _, _, _, err := s.vehicle.AuthorizeVehicleForPlanning(ctx, userID, vehicleID); err != nil {
+	_, fuelType, _, err := s.vehicle.AuthorizeVehicleForPlanning(ctx, userID, vehicleID)
+	if err != nil {
 		return Profile{}, err
 	}
 
 	question, option, err := req.normalizeAndValidate()
 	if err != nil {
 		return Profile{}, err
+	}
+
+	// A question about a part the vehicle cannot have is refused, not recorded. Asking an
+	// electric car about its timing belt is the bug profile.go exists to prevent; accepting
+	// the answer anyway would create the very plan the question was never offered to avoid.
+	// A vehicle with no fuel type is not refused — the owner may know more than we do.
+	if PowertrainFor(fuelType).Applies(question.Requires) == ApplicabilityNo {
+		return Profile{}, apperr.Validation("Essa pergunta não vale para este carro.",
+			map[string]any{"question_id": "Este carro não tem esse componente."})
 	}
 
 	slugs := append(append([]string{}, option.Applicable...), option.NotApplicable...)
@@ -330,7 +392,7 @@ func (s *Service) CreatePlan(ctx context.Context, userID, vehicleID uuid.UUID, r
 		strategy = StrategyPeriodic
 	}
 
-	plan, err := s.repo.CreatePlan(ctx, db.CreateMaintenancePlanParams{
+	plan, created, err := s.repo.CreateOrReactivatePlan(ctx, db.CreateOrReactivateMaintenancePlanParams{
 		ID:                planID,
 		VehicleID:         vehicleID,
 		MaintenanceItemID: itemID,
@@ -350,11 +412,18 @@ func (s *Service) CreatePlan(ctx context.Context, userID, vehicleID uuid.UUID, r
 	case err != nil:
 		return db.MaintenancePlan{}, apperr.Internal(err)
 	}
+	// An active plan was already there. The same id means this is the client retrying a
+	// request that already landed — answer with what it created. Anything else is a real
+	// duplicate.
+	if !created && plan.ID != planID {
+		return db.MaintenancePlan{}, apperr.Conflict(
+			"Este veículo já tem um plano para esse item.")
+	}
 	return plan, nil
 }
 
 func (s *Service) UpdatePlan(ctx context.Context, userID, planID uuid.UUID, req updatePlanRequest) (db.MaintenancePlan, error) {
-	if _, _, err := s.authorizePlan(ctx, userID, planID); err != nil {
+	if _, err := s.authorizePlan(ctx, userID, planID); err != nil {
 		return db.MaintenancePlan{}, err
 	}
 	if err := req.validate(); err != nil {
@@ -384,7 +453,7 @@ func (s *Service) UpdatePlan(ctx context.Context, userID, planID uuid.UUID, req 
 }
 
 func (s *Service) DeletePlan(ctx context.Context, userID, planID uuid.UUID) error {
-	if _, _, err := s.authorizePlan(ctx, userID, planID); err != nil {
+	if _, err := s.authorizePlan(ctx, userID, planID); err != nil {
 		return err
 	}
 	err := s.repo.DeactivatePlan(ctx, planID)
@@ -598,7 +667,7 @@ func (s *Service) UpdateRecord(ctx context.Context, userID, recordID uuid.UUID, 
 		// 'maintenance'; "correction" only skips neighbour checking. A care record
 		// with no mileage has no reading to check.
 		if mileageKm != nil && req.Source != recordSourceCorrection {
-			if err := s.vehicle.CheckOdometerConsistency(ctx, existing.VehicleID, occurredOn, *mileageKm); err != nil {
+			if err := s.vehicle.CheckOdometerConsistencyForEdit(ctx, existing.VehicleID, occurredOn, *mileageKm, existing.ID); err != nil {
 				return db.MaintenanceRecord{}, nil, err
 			}
 		}

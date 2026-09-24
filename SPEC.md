@@ -88,6 +88,10 @@ Consequências:
 - Violação responde `422` com código `odometer_rollback` e os detalhes do vizinho que
   causou o conflito. O cliente pode reenviar com `source: "correction"` para forçar.
   **Não bloquear duro** — painel trocado existe.
+- **Edição não se compara consigo mesma.** Ao editar a data ou a km de uma manutenção ou
+  de um abastecimento, a leitura que o próprio evento gerou fica fora dos vizinhos
+  (`CheckOdometerConsistencyForEdit`). Antes, corrigir 105.000 → 104.000 km no registro
+  mais recente era recusado como retrocesso contra o próprio valor antigo.
 - **`source` aceito do cliente é só `manual` ou `correction`.** `maintenance` e
   `abastecimento` são escritos por aqueles módulos; aceitá-los aqui deixaria o cliente
   forjar uma leitura que se diz originada de uma manutenção.
@@ -143,6 +147,19 @@ para cada plano ativo do veículo:
 - **Um registro exige ao menos um item.** Registro sem item não reseta relógio nenhum e não
   pertence a plano nenhum — seria um custo sem significado para o motor. O item
   `personalizada` do catálogo é a saída para o que não tem nome.
+- **"Nunca foi feito" conta desde novo.** Um plano sem registro e com
+  `history_status = never` é medido a partir de 0 km e, quando se sabe o ano, de 1º de
+  janeiro do ano de fabricação (ou do ano anterior ao ano-modelo) — o carro novo é o único
+  ponto de partida que a resposta afirma. Sem ano, a dimensão de tempo não é avaliada.
+  Nada é gravado (`SinceNewBaseline` em `due.go`), a resposta do plano diz
+  `baseline: "since_new"` e um registro do serviço sempre vence a suposição. Antes, "nunca"
+  deixava o plano `sem_baseline` para sempre: uma correia nunca trocada num carro de
+  140.000 km não gerava aviso nenhum.
+- **Ordenação por urgência.** Dentro de uma gravidade, vem primeiro o item mais adiantado
+  no **próprio** intervalo (`Due.Urgency`: o pior entre km e tempo de
+  `1 − restante/intervalo`). Comparar dias restantes antes de km punha uma calibragem que
+  vence hoje à frente de uma troca de óleo 41.000 km atrasada — e o dashboard só leva os
+  cinco primeiros. Os alertas do insight usam a mesma medida (prazos anuais contra 365 dias).
 - **"Próxima manutenção" nunca é armazenada.** Sempre calculada.
   Gatilho para denormalizar `next_due_km/date` no plano: quando o push notification
   precisar varrer todos os veículos em batch.
@@ -186,6 +203,11 @@ duas vezes.
 
 O relatório de custo é uma **VIEW** `vehicle_costs` que faz `UNION ALL` das fontes,
 normalizando `(vehicle_id, occurred_on, category, amount_cents, source_type, source_id)`.
+
+**Valor de uma manutenção sem total:** a soma das linhas. **Tributo pago sem valor pago:**
+o valor devido. A timeline e o total de custos seguem a mesma regra
+(`db/queries/insight/timeline.sql`), para as duas telas contarem a mesma história; antes,
+R$ 450 nas linhas e nenhum total apareciam como R$ 0,00.
 
 > Gatilho para migrar para um ledger real: parcelamento, rateio entre pessoas, ou
 > anexo de NF de forma uniforme.
@@ -240,8 +262,16 @@ Dois detalhes que a implementação fixou:
 - **Vencendo hoje é `vence_em_breve`, não `vencido`.** Ainda há horas para pagar, e dizer
   que a pessoa perdeu um prazo que ela não perdeu é pior que dizer que está perto.
 - **Pagamento quita, mesmo em atraso.** IPVA pago depois do vencimento é `pago`, não
-  `vencido` — a dívida acabou. Os dias restantes continuam sendo devolvidos (negativos), o
-  que permite a tela mostrar "pago com 3 dias de atraso".
+  `vencido` — a dívida acabou. Os dias restantes continuam sendo devolvidos, mas contam de
+  **hoje** até o vencimento: o atraso do pagamento é `paid_on − due_on`, e é isso que a
+  tela usa para dizer "pago com 3 dias de atraso". (Esta seção dizia o contrário, e o app
+  seguiu: um IPVA pago no dia virava "pago com 60 dias de atraso" dois meses depois.)
+- **Apólice renovada não alerta.** Uma apólice da qual outra assumiu — emendada até o dia
+  seguinte ao fim, ou já em vigor — continua com o status das próprias datas, mas
+  `renewed: true` e fora dos alertas (`SeguroRenewed`). Uma renovação futura depois de um
+  intervalo não conta: até ela começar, o carro está mesmo sem seguro.
+- **Garantia expirada não é alerta.** Não há mais o que fazer; o registro continua
+  mostrando a garantia e o fim dela.
 
 Janela de alerta: **30 dias** para todos. IPVA, licenciamento e renovação de apólice são
 anuais, e um mês é aproximadamente o que se leva para juntar o dinheiro ou cotar.

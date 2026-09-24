@@ -53,6 +53,10 @@ const (
 	// the dashboard only needs enough to show what is urgent without a second request.
 	dashboardAlertLimit = 5
 
+	// How many "what comes next" lines. Three is a glance; more is a list, and the lists
+	// have their own screens.
+	dashboardUpcomingLimit = 3
+
 	defaultCostMonths = 12
 	maxCostMonths     = 120
 
@@ -135,31 +139,55 @@ func maintenanceAlerts(dues []maintenance.Due) []Alert {
 			kind = KindCare
 		}
 
+		// Said on the alert itself, because "passou 80.000 km" on a part the owner never
+		// registered reads like a mistake unless the line explains where it counts from.
+		var subtitle *string
+		if due.Last != nil && due.Last.SinceNew {
+			subtitle = optional(sinceNewSubtitle)
+		}
+
 		out = append(out, Alert{
 			Kind:          kind,
 			Severity:      severity,
 			Title:         due.Plan.ItemName,
+			Subtitle:      subtitle,
 			DueOn:         formatDatePtr(due.DueOn),
 			DueAtKm:       due.DueAtKm,
 			RemainingDays: due.RemainingDays,
 			RemainingKm:   due.RemainingKm,
 			ReferenceType: "maintenance_plan",
 			ReferenceID:   due.Plan.ID.String(),
+			urgency:       due.Urgency(),
 		})
 	}
 	return out
 }
 
+// warrantyAlerts keeps the warranties that are about to run out.
+//
+// An EXPIRED warranty is not an alert. There is nothing left to do about it — the window to
+// go back to the workshop has closed — and keeping it on the list meant it stayed there as
+// "vencido" for as long as the record existed, months after anyone could act on it. The
+// record still shows the warranty and its end; only the nagging stops.
 func warrantyAlerts(warranties []maintenance.Warranty) []Alert {
 	out := make([]Alert, 0, len(warranties))
 
 	for _, warranty := range warranties {
 		severity, ok := severityFor(string(warranty.Status))
-		if !ok {
+		if !ok || severity == SeverityOverdue {
 			continue
 		}
 
+		urgency := 0.0
+		if warranty.RemainingDays != nil {
+			urgency = max(urgency, consumed(float64(*warranty.RemainingDays), 30))
+		}
+		if warranty.RemainingKm != nil {
+			urgency = max(urgency, consumed(float64(*warranty.RemainingKm), 1000))
+		}
+
 		out = append(out, Alert{
+			urgency:       urgency,
 			Kind:          KindWarranty,
 			Severity:      severity,
 			Title:         warranty.ItemName,
@@ -180,29 +208,49 @@ func obligationAlerts(upcoming []obligation.Upcoming) []Alert {
 
 	for _, item := range upcoming {
 		severity, ok := severityFor(item.Status)
-		if !ok {
+		// A policy another one took over from is history, not a warning that the car is
+		// uninsured (obligation.SeguroRenewed).
+		if !ok || item.Renewed {
 			continue
 		}
 
-		remainingDays := int32(item.RemainingDays)
-		dueOn := item.DueOn
-
-		referenceType := "obligation"
-		if item.Kind == "seguro" {
-			referenceType = "seguro"
-		}
-
-		out = append(out, Alert{
-			Kind:          Kind(item.Kind),
-			Severity:      severity,
-			Title:         item.Label,
-			DueOn:         formatDatePtr(&dueOn),
-			RemainingDays: &remainingDays,
-			ReferenceType: referenceType,
-			ReferenceID:   item.ID.String(),
-		})
+		out = append(out, obligationAlert(item, severity))
 	}
 	return out
+}
+
+// sinceNewSubtitle explains a due point counted from the car being new — "passou 38.000
+// km" on a part the owner never registered reads like a mistake without it.
+const sinceNewSubtitle = "Nunca feito desde novo"
+
+// obligationYear is the cycle a dated obligation's urgency is measured against: IPVA,
+// licenciamento and a policy renewal all come round once a year.
+const obligationYear = 365
+
+func obligationAlert(item obligation.Upcoming, severity Severity) Alert {
+	remainingDays := int32(item.RemainingDays)
+	dueOn := item.DueOn
+
+	referenceType := "obligation"
+	title, subtitle := item.Label, (*string)(nil)
+	if item.Kind == "seguro" {
+		referenceType = "seguro"
+		// "Porto Seguro · vence em 10 dias" said whose policy, not what it was. The
+		// thing is the insurance; the insurer is the detail.
+		title, subtitle = "Seguro", optional(item.Label)
+	}
+
+	return Alert{
+		Kind:          Kind(item.Kind),
+		Severity:      severity,
+		Title:         title,
+		Subtitle:      subtitle,
+		DueOn:         formatDatePtr(&dueOn),
+		RemainingDays: &remainingDays,
+		ReferenceType: referenceType,
+		ReferenceID:   item.ID.String(),
+		urgency:       consumed(float64(item.RemainingDays), obligationYear),
+	}
 }
 
 // severityFor maps a domain status onto an alert severity, reporting false for anything
@@ -274,6 +322,20 @@ func (s *Service) Dashboard(ctx context.Context, userID, vehicleID uuid.UUID, co
 		}
 	}
 
+	// Every item whose next due date nobody can compute, whether or not the owner was
+	// already asked. This is the number that stops the verdict from saying "tudo em dia"
+	// about a car we know nothing about: needs_baseline drops an item the moment the owner
+	// answers "não sei", which is right for a prompt and wrong for a verdict.
+	//
+	// Habits are left out. A care item without a baseline is simply "time to check" and the
+	// app already says so; it is not a gap in what we know about the car.
+	unknownHistory := 0
+	for _, due := range dues {
+		if due.Status == maintenance.StatusNoBaseline && due.Plan.ItemKind != maintenance.KindCare {
+			unknownHistory++
+		}
+	}
+
 	profile, err := s.maintenance.Profile(ctx, userID, vehicleID)
 	if err != nil {
 		return Dashboard{}, err
@@ -290,8 +352,67 @@ func (s *Service) Dashboard(ctx context.Context, userID, vehicleID uuid.UUID, co
 		return Dashboard{}, err
 	}
 
-	return buildDashboard(summary, alerts, needsBaseline, profile, costs, costMonths, since,
-		dashboardAlertLimit, lastFill), nil
+	dashboard := buildDashboard(summary, alerts, needsBaseline, profile, costs, costMonths, since,
+		dashboardAlertLimit, lastFill)
+	dashboard.Alerts.UnknownHistory = unknownHistory
+	dashboard.Upcoming = upcomingItems(dues, upcoming, dashboardUpcomingLimit)
+	return dashboard, nil
+}
+
+// upcomingItems is what comes next among the things that are fine today: maintenance on
+// track, an IPVA or licenciamento not yet close, a policy in force.
+//
+// It answers the other half of "o que precisa fazer agora e o que pode esperar". Before it,
+// a car with nothing overdue showed a verdict and nothing else — no sign of what was coming,
+// which is the owner's most valuable question (PRODUCT.md, principle 1).
+//
+// Ordered by the same urgency as the alerts, so the item furthest through its own interval
+// comes first. Habits are left out: a tyre-pressure check every fifteen days would crowd out
+// everything else, and the maintenance screen already carries them.
+func upcomingItems(dues []maintenance.Due, obligations []obligation.Upcoming, limit int) []Alert {
+	out := make([]Alert, 0, limit)
+
+	for _, due := range dues {
+		if due.Status != maintenance.StatusOnTrack || due.Plan.ItemKind == maintenance.KindCare {
+			continue
+		}
+		if due.DueAtKm == nil && due.DueOn == nil {
+			continue
+		}
+		var subtitle *string
+		if due.Last != nil && due.Last.SinceNew {
+			subtitle = optional(sinceNewSubtitle)
+		}
+		out = append(out, Alert{
+			Kind:          KindMaintenance,
+			Severity:      SeverityOnTrack,
+			Title:         due.Plan.ItemName,
+			Subtitle:      subtitle,
+			DueOn:         formatDatePtr(due.DueOn),
+			DueAtKm:       due.DueAtKm,
+			RemainingDays: due.RemainingDays,
+			RemainingKm:   due.RemainingKm,
+			ReferenceType: "maintenance_plan",
+			ReferenceID:   due.Plan.ID.String(),
+			urgency:       due.Urgency(),
+		})
+	}
+
+	for _, item := range obligations {
+		if item.Renewed {
+			continue
+		}
+		if item.Status != string(obligation.StatusPending) && item.Status != string(obligation.SeguroActive) {
+			continue
+		}
+		out = append(out, obligationAlert(item, SeverityOnTrack))
+	}
+
+	sortAlerts(out)
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }
 
 // Timeline returns one page of unified history.

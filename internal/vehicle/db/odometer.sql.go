@@ -74,17 +74,21 @@ SELECT id, vehicle_id, mileage_km, occurred_on, source, recorded_by_user_id, not
 FROM odometer_readings
 WHERE vehicle_id = $1
   AND occurred_on > $2
+  AND ($3::uuid IS NULL
+       OR (source_maintenance_id IS DISTINCT FROM $3::uuid
+           AND source_abastecimento_id IS DISTINCT FROM $3::uuid))
 ORDER BY occurred_on ASC, created_at ASC
 LIMIT 1
 `
 
 type GetNextOdometerReadingParams struct {
-	VehicleID  uuid.UUID
-	OccurredOn time.Time
+	VehicleID       uuid.UUID
+	OccurredOn      time.Time
+	ExcludeSourceID *uuid.UUID
 }
 
 func (q *Queries) GetNextOdometerReading(ctx context.Context, arg GetNextOdometerReadingParams) (OdometerReading, error) {
-	row := q.db.QueryRow(ctx, getNextOdometerReading, arg.VehicleID, arg.OccurredOn)
+	row := q.db.QueryRow(ctx, getNextOdometerReading, arg.VehicleID, arg.OccurredOn, arg.ExcludeSourceID)
 	var i OdometerReading
 	err := row.Scan(
 		&i.ID,
@@ -125,17 +129,22 @@ func (q *Queries) GetOdometerReading(ctx context.Context, id uuid.UUID) (Odomete
 
 const getPreviousOdometerReading = `-- name: GetPreviousOdometerReading :one
 
+
 SELECT id, vehicle_id, mileage_km, occurred_on, source, recorded_by_user_id, notes, created_at, source_maintenance_id, source_abastecimento_id
 FROM odometer_readings
 WHERE vehicle_id = $1
   AND occurred_on <= $2
+  AND ($3::uuid IS NULL
+       OR (source_maintenance_id IS DISTINCT FROM $3::uuid
+           AND source_abastecimento_id IS DISTINCT FROM $3::uuid))
 ORDER BY occurred_on DESC, created_at DESC
 LIMIT 1
 `
 
 type GetPreviousOdometerReadingParams struct {
-	VehicleID  uuid.UUID
-	OccurredOn time.Time
+	VehicleID       uuid.UUID
+	OccurredOn      time.Time
+	ExcludeSourceID *uuid.UUID
 }
 
 // The monotonicity check for a new reading (SPEC.md RN-01).
@@ -149,8 +158,13 @@ type GetPreviousOdometerReadingParams struct {
 // NOT NULL, which is wrong here — a vehicle's first reading has no neighbour on either
 // side, and scanning that NULL into an int32 fails at runtime. Splitting them makes
 // "no neighbour" an unambiguous pgx.ErrNoRows.
+//
+// exclude_source_id names the event being EDITED. A record or a fill that moves its own
+// mileage must not be compared against the reading it produced itself: correcting a typo
+// from 105.000 to 104.000 km on the latest record used to be refused as a rollback against
+// its own old value. NULL for a new reading, which has nothing of its own to skip.
 func (q *Queries) GetPreviousOdometerReading(ctx context.Context, arg GetPreviousOdometerReadingParams) (OdometerReading, error) {
-	row := q.db.QueryRow(ctx, getPreviousOdometerReading, arg.VehicleID, arg.OccurredOn)
+	row := q.db.QueryRow(ctx, getPreviousOdometerReading, arg.VehicleID, arg.OccurredOn, arg.ExcludeSourceID)
 	var i OdometerReading
 	err := row.Scan(
 		&i.ID,

@@ -399,7 +399,21 @@ func (s *Service) CreateReading(ctx context.Context, userID, vehicleID uuid.UUID
 // carry a mileage and produce a reading, so both must satisfy the same invariant. Sharing
 // the method rather than the query is what keeps one definition of the rule.
 func (s *Service) CheckOdometerConsistency(ctx context.Context, vehicleID uuid.UUID, occurredOn time.Time, mileageKm int32) error {
-	previous, next, err := s.repo.NeighbouringReadings(ctx, vehicleID, occurredOn)
+	return s.checkOdometerConsistency(ctx, vehicleID, occurredOn, mileageKm, nil)
+}
+
+// CheckOdometerConsistencyForEdit is the same rule for an event that already produced a
+// reading and is moving it: a maintenance record or an abastecimento being edited.
+//
+// sourceID is that event's id. Its own reading is left out of the neighbours, because the
+// value being corrected is exactly the one that would otherwise be quoted back as "the
+// previous record" — which made a typo on the latest record impossible to fix.
+func (s *Service) CheckOdometerConsistencyForEdit(ctx context.Context, vehicleID uuid.UUID, occurredOn time.Time, mileageKm int32, sourceID uuid.UUID) error {
+	return s.checkOdometerConsistency(ctx, vehicleID, occurredOn, mileageKm, &sourceID)
+}
+
+func (s *Service) checkOdometerConsistency(ctx context.Context, vehicleID uuid.UUID, occurredOn time.Time, mileageKm int32, excludeSourceID *uuid.UUID) error {
+	previous, next, err := s.repo.NeighbouringReadings(ctx, vehicleID, occurredOn, excludeSourceID)
 	if err != nil {
 		return apperr.Internal(err)
 	}
@@ -455,6 +469,32 @@ func (s *Service) AuthorizeVehicleForPlanning(ctx context.Context, userID, vehic
 		return "", nil, 0, err
 	}
 	return v.VehicleType, v.FuelType, v.CurrentMileageKm, nil
+}
+
+// AuthorizeVehicleForDue is what the due engine needs about a vehicle: its fuel, its
+// current mileage, and the year it was built.
+//
+// The year serves one answer only — "nunca foi feito", which counts an item from the car
+// being new (maintenance.SinceNewBaseline). The manufacture year when the owner gave it;
+// otherwise the year before the model year, the earliest a car sold as that model can
+// have left the factory. nil when neither is known.
+func (s *Service) AuthorizeVehicleForDue(ctx context.Context, userID, vehicleID uuid.UUID) (fuelType *string, currentMileageKm int32, builtYear *int32, err error) {
+	v, err := s.authorizeVehicle(ctx, userID, vehicleID)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	return v.FuelType, v.CurrentMileageKm, builtYearOf(v.ManufactureYear, v.ModelYear), nil
+}
+
+func builtYearOf(manufactureYear, modelYear *int32) *int32 {
+	if manufactureYear != nil {
+		return manufactureYear
+	}
+	if modelYear != nil {
+		year := *modelYear - 1
+		return &year
+	}
+	return nil
 }
 
 // SetPlanInitializer wires the maintenance module in after construction.

@@ -110,10 +110,38 @@ type Plan struct {
 // MileageKm is nil when the record did not assert a distance — a care habit (calibrar
 // pneus, lavar o carro) has a date and no odometer fact. The distance dimension must not
 // be evaluated from that (SPEC.md RN-03).
+//
+// SinceNew marks the one baseline that does not come from a record: the owner said the
+// item was NEVER done, so it has been running since the car was new. RecordID is then
+// uuid.Nil, MileageKm is 0, and OccurredOn is the start of the year the car was built — or
+// the zero time when nobody told us the year, in which case the time dimension is not
+// evaluated at all. See SinceNewBaseline.
 type Performed struct {
 	RecordID   uuid.UUID
 	OccurredOn time.Time
 	MileageKm  *int32
+	SinceNew   bool
+}
+
+// SinceNewBaseline is what "nunca foi feito" means for the due engine.
+//
+// It is not a record and it is never stored: the answer lives on the plan
+// (history_status = never) and this is derived from it on every read, like every other due
+// date here. An item that was never replaced has been running since the car left the
+// factory, at 0 km — which on a 140.000 km car means a timing belt that is long overdue,
+// and saying nothing about it (what "never" used to produce) was the most dangerous answer
+// the product could give.
+//
+// builtYear is the year the vehicle was built, nil when unknown. The first of January of
+// that year is the earliest the car can have been new; with only a year to go on, warning a
+// little early about a part nobody ever replaced beats warning late.
+func SinceNewBaseline(builtYear *int32) Performed {
+	zero := int32(0)
+	baseline := Performed{MileageKm: &zero, SinceNew: true}
+	if builtYear != nil && *builtYear > 0 {
+		baseline.OccurredOn = time.Date(int(*builtYear), time.January, 1, 0, 0, 0, 0, time.UTC)
+	}
+	return baseline
 }
 
 // Due is the computed state of one plan.
@@ -169,7 +197,10 @@ func ComputeDue(plan Plan, last *Performed, currentMileageKm int32, today time.T
 		byDistance = evaluate(int(remainingKm), int(plan.AlertKm))
 	}
 
-	if plan.IntervalMonths != nil || plan.IntervalDays != nil {
+	// A "since new" baseline on a car of unknown age has no date to count from. The time
+	// dimension then does not apply, exactly as it would not for a plan with no time
+	// interval — never "counted from year one".
+	if (plan.IntervalMonths != nil || plan.IntervalDays != nil) && !last.OccurredOn.IsZero() {
 		dueOn := last.OccurredOn
 		if plan.IntervalMonths != nil {
 			dueOn = civil.AddMonths(dueOn, int(*plan.IntervalMonths))
@@ -210,19 +241,45 @@ func ComputeAll(plans []Plan, lastByItem map[uuid.UUID]Performed, currentMileage
 		if c := cmp.Compare(b.Status.severity(), a.Status.severity()); c != 0 {
 			return c
 		}
-		// Within a status, the closest deadline first. A dimension that does not apply
-		// sorts last rather than first, so a plan measured only in kilometres does not
-		// outrank an overdue date.
-		if c := cmp.Compare(orMax(a.RemainingDays), orMax(b.RemainingDays)); c != 0 {
-			return c
-		}
-		if c := cmp.Compare(orMax(a.RemainingKm), orMax(b.RemainingKm)); c != 0 {
+		// Within a status, the one furthest through its interval first — see Urgency.
+		if c := cmp.Compare(b.Urgency(), a.Urgency()); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.Plan.ItemName, b.Plan.ItemName)
 	})
 
 	return out
+}
+
+// Urgency is how far through its interval a plan is, as a fraction: 0 just done, 1 due
+// now, 2 a whole interval late. It is the worse of the two dimensions, the same "OU" as the
+// status.
+//
+// It exists for ORDERING, and it replaces comparing remaining days first and kilometres
+// second. That comparison put a care habit due today ahead of an oil change 41.000 km late,
+// because the oil change still had months left on its date — and the dashboard only
+// carries the first few, so the order decided what the owner saw at all. A fraction of the
+// item's own interval is the one scale on which a 15-day habit and a 60.000 km belt can be
+// compared honestly.
+//
+// A dimension with no interval, or no remainder, does not contribute. Never stored, never
+// shown: it chooses which line comes first and nothing else.
+func (d Due) Urgency() float64 {
+	urgency := 0.0
+	if d.RemainingKm != nil && d.Plan.IntervalKm != nil && *d.Plan.IntervalKm > 0 {
+		urgency = max(urgency, consumed(float64(*d.RemainingKm), float64(*d.Plan.IntervalKm)))
+	}
+	if d.RemainingDays != nil && d.DueOn != nil && d.Last != nil && !d.Last.OccurredOn.IsZero() {
+		if span := civil.DaysBetween(d.Last.OccurredOn, *d.DueOn); span > 0 {
+			urgency = max(urgency, consumed(float64(*d.RemainingDays), float64(span)))
+		}
+	}
+	return urgency
+}
+
+// consumed turns "what is left of an interval" into "how much of it has gone".
+func consumed(remaining, interval float64) float64 {
+	return 1 - remaining/interval
 }
 
 func evaluate(remaining, alert int) Status {
@@ -241,12 +298,4 @@ func worst(a, b Status) Status {
 		return a
 	}
 	return b
-}
-
-// orMax makes a nil remainder sort last.
-func orMax(v *int32) int32 {
-	if v == nil {
-		return 1<<31 - 1
-	}
-	return *v
 }

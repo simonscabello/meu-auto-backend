@@ -34,6 +34,11 @@ type Severity string
 const (
 	SeverityOverdue Severity = "vencido"
 	SeverityDueSoon Severity = "vence_em_breve"
+
+	// SeverityOnTrack appears ONLY in dashboard.upcoming, never in alerts: an item there is
+	// fine today and is listed because it is what comes next. alerts.items keeps its two
+	// values, which an installed app relies on.
+	SeverityOnTrack Severity = "em_dia"
 )
 
 // Alert is one thing needing the owner's attention, in a shape the app can render as a
@@ -56,39 +61,44 @@ type Alert struct {
 	// Where the app should navigate when the alert is tapped.
 	ReferenceType string `json:"reference_type"`
 	ReferenceID   string `json:"reference_id"`
+
+	// urgency orders the list and is never sent: how far through its own window the thing
+	// is, 1 meaning due now. It comes from the module that owns the rule — the due engine
+	// for maintenance (maintenance.Due.Urgency) — and for the dated obligations it is
+	// measured against their yearly cycle. Comparing remaining days first and kilometres
+	// second used to rank a habit due today above an oil change 41.000 km late.
+	urgency float64
 }
 
 // sortAlerts orders the list the way it should be read: what is late first, and inside
-// that, what is latest.
+// that, what is furthest gone.
 func sortAlerts(alerts []Alert) {
 	slices.SortStableFunc(alerts, func(a, b Alert) int {
 		if c := cmp.Compare(severityRank(b.Severity), severityRank(a.Severity)); c != 0 {
 			return c
 		}
-		// Closest deadline first. A dimension that does not apply sorts last rather than
-		// first, so a distance-only alert does not jump ahead of an overdue date.
-		if c := cmp.Compare(orMax(a.RemainingDays), orMax(b.RemainingDays)); c != 0 {
-			return c
-		}
-		if c := cmp.Compare(orMax(a.RemainingKm), orMax(b.RemainingKm)); c != 0 {
+		if c := cmp.Compare(b.urgency, a.urgency); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.Title, b.Title)
 	})
 }
 
-func severityRank(s Severity) int {
-	if s == SeverityOverdue {
-		return 1
-	}
-	return 0
+// consumed turns "what is left of a window" into "how much of it has gone" — the same
+// measure the due engine uses, for the things that do not come from it.
+func consumed(remaining, window float64) float64 {
+	return 1 - remaining/window
 }
 
-func orMax(v *int32) int32 {
-	if v == nil {
-		return 1<<31 - 1
+func severityRank(s Severity) int {
+	switch s {
+	case SeverityOverdue:
+		return 2
+	case SeverityDueSoon:
+		return 1
+	default:
+		return 0
 	}
-	return *v
 }
 
 func formatDatePtr(t *time.Time) *string {

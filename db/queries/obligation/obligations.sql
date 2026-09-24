@@ -7,6 +7,13 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (vehicle_id, kind, reference_year) DO NOTHING
 RETURNING *;
 
+-- The row a create collided with. Read only after a conflict, to tell the client retrying
+-- a request that already landed (same id) from a genuine second IPVA for the same year.
+-- name: GetObligationForYear :one
+SELECT *
+FROM vehicle_obligations
+WHERE vehicle_id = $1 AND kind = $2 AND reference_year = $3;
+
 -- name: ListObligationsForVehicle :many
 SELECT *
 FROM vehicle_obligations

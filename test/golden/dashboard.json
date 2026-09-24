@@ -17,7 +17,8 @@
         }
       ],
       "needs_baseline": "number",
-      "overdue": "number"
+      "overdue": "number",
+      "unknown_history": "number"
     },
     "costs": {
       "abastecimento_cents": "number",
@@ -61,6 +62,20 @@
       "powertrain_known": "boolean",
       "status": "string"
     },
+    "upcoming": [
+      {
+        "due_at_km": "null|number",
+        "due_on": "string",
+        "kind": "string",
+        "reference_id": "string",
+        "reference_type": "string",
+        "remaining_days": "number",
+        "remaining_km": "null|number",
+        "severity": "string",
+        "subtitle": "null|string",
+        "title": "string"
+      }
+    ],
     "vehicle": {
       "brand": "string",
       "id": "string",

@@ -657,7 +657,23 @@ type planResponse struct {
 
 	LastOccurredOn *string `json:"last_occurred_on"`
 	LastMileageKm  *int32  `json:"last_mileage_km"`
+
+	// Baseline says what the due point above is measured from: "record" — the last time
+	// the service was registered — or "since_new", when the owner said it was never done
+	// and it is counted from the car being new. null when there is nothing to measure from
+	// (status sem_baseline).
+	//
+	// last_occurred_on and last_mileage_km stay null for since_new: nothing was performed,
+	// and an app printing them as "the last service" would show a 0 km visit that never
+	// happened.
+	Baseline *string `json:"baseline"`
 }
+
+// Baseline values.
+const (
+	BaselineRecord   = "record"
+	BaselineSinceNew = "since_new"
+)
 
 func toPlanResponse(due Due) planResponse {
 	out := planResponse{
@@ -683,7 +699,14 @@ func toPlanResponse(due Due) planResponse {
 		RemainingKm:     due.RemainingKm,
 		RemainingDays:   due.RemainingDays,
 	}
-	if due.Last != nil {
+	switch {
+	case due.Last == nil:
+	case due.Last.SinceNew:
+		baseline := BaselineSinceNew
+		out.Baseline = &baseline
+	default:
+		baseline := BaselineRecord
+		out.Baseline = &baseline
 		out.LastOccurredOn = civil.FormatPtr(&due.Last.OccurredOn)
 		out.LastMileageKm = due.Last.MileageKm
 	}

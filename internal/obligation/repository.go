@@ -44,6 +44,21 @@ func (r *Repository) CreateObligation(ctx context.Context, params db.CreateOblig
 	return obligation, nil
 }
 
+// ObligationForYear returns the obligation of a kind for a year, or ErrObligationNotFound.
+// The caller has already authorised the vehicle.
+func (r *Repository) ObligationForYear(ctx context.Context, vehicleID uuid.UUID, kind string, referenceYear int32) (db.VehicleObligation, error) {
+	obligation, err := r.queries.GetObligationForYear(ctx, db.GetObligationForYearParams{
+		VehicleID: vehicleID, Kind: kind, ReferenceYear: referenceYear,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.VehicleObligation{}, ErrObligationNotFound
+	}
+	if err != nil {
+		return db.VehicleObligation{}, fmt.Errorf("get obligation for year: %w", err)
+	}
+	return obligation, nil
+}
+
 func (r *Repository) ListObligations(ctx context.Context, vehicleID uuid.UUID, kind *string) ([]db.VehicleObligation, error) {
 	obligations, err := r.queries.ListObligationsForVehicle(ctx, db.ListObligationsForVehicleParams{
 		VehicleID: vehicleID, Kind: kind,

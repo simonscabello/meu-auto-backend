@@ -4,17 +4,17 @@
     "id": "string",
     "items": [
       {
-        "cost_cents": "number",
-        "description": "string",
+        "cost_cents": "null|number",
+        "description": "null|string",
         "id": "string",
         "item_name": "string",
         "item_slug": "string",
         "maintenance_item_id": "string",
-        "part_brand": "string",
-        "warranty_km": "number",
-        "warranty_months": "number",
-        "warranty_until": "string",
-        "warranty_until_km": "number"
+        "part_brand": "null|string",
+        "warranty_km": "null|number",
+        "warranty_months": "null|number",
+        "warranty_until": "null|string",
+        "warranty_until_km": "null|number"
       }
     ],
     "kind": "string",

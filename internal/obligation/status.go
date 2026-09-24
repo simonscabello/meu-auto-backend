@@ -95,3 +95,34 @@ func ComputeSeguroStatus(startsOn, endsOn, today time.Time) (SeguroStatus, int) 
 		return SeguroActive, remainingDays
 	}
 }
+
+// Period is one policy's cover, for SeguroRenewed.
+type Period struct {
+	StartsOn time.Time
+	EndsOn   time.Time
+}
+
+// SeguroRenewed reports whether another policy on the same car takes over from this one.
+//
+// A renewal is a new row: the old policy keeps its own dates, so on its own it goes on to
+// "vence em breve" and then "vencido" — and the old alert kept telling the owner the car
+// was uninsured for as long as the record existed, beside the new policy that covers it.
+//
+// Another policy takes over when it ends later AND either starts no later than the day
+// after this one ends (a continuous renewal) or is already in force today (cover resumed
+// after a gap). A later policy that has not started yet, after a gap, does not: until it
+// starts the car genuinely has no cover, and that alert is true.
+func SeguroRenewed(this Period, others []Period, today time.Time) bool {
+	dayAfterEnd := this.EndsOn.AddDate(0, 0, 1)
+	for _, other := range others {
+		if !other.EndsOn.After(this.EndsOn) {
+			continue
+		}
+		continuous := !other.StartsOn.After(dayAfterEnd)
+		inForce := !today.Before(other.StartsOn) && !today.After(other.EndsOn)
+		if continuous || inForce {
+			return true
+		}
+	}
+	return false
+}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -73,6 +72,15 @@ func (s *Service) CreateObligation(ctx context.Context, userID, vehicleID uuid.U
 	})
 	switch {
 	case errors.Is(err, ErrDuplicateYear):
+		// A retry of a request that already landed carries the same id and gets its own
+		// row back. Without this, an owner whose first attempt timed out after the server
+		// had saved it was told they already had an IPVA for the year — their own.
+		if req.ID != "" {
+			existing, lookupErr := s.repo.ObligationForYear(ctx, vehicleID, req.Kind, req.ReferenceYear)
+			if lookupErr == nil && existing.ID == id {
+				return existing, nil
+			}
+		}
 		return db.VehicleObligation{}, apperr.Conflict(
 			"Este veículo já tem um registro deste tipo para esse ano.")
 	case err != nil:
@@ -196,6 +204,37 @@ func (s *Service) GetSeguro(ctx context.Context, userID, seguroID uuid.UUID) (db
 	return s.authorizeSeguro(ctx, userID, seguroID)
 }
 
+// RenewedAmong reports which of a vehicle's policies another one has taken over from
+// (SeguroRenewed). Pass every policy of the vehicle: renewal is a fact about the set.
+func (s *Service) RenewedAmong(seguros []db.Seguro) map[uuid.UUID]bool {
+	return renewalsOf(seguros, s.today())
+}
+
+// IsRenewed answers the same for one policy the caller was already authorised for,
+// reading its vehicle's other policies.
+func (s *Service) IsRenewed(ctx context.Context, seguro db.Seguro) (bool, error) {
+	seguros, err := s.repo.ListSeguros(ctx, seguro.VehicleID)
+	if err != nil {
+		return false, apperr.Internal(err)
+	}
+	return renewalsOf(seguros, s.today())[seguro.ID], nil
+}
+
+func renewalsOf(seguros []db.Seguro, today time.Time) map[uuid.UUID]bool {
+	periods := make([]Period, len(seguros))
+	for i, seguro := range seguros {
+		periods[i] = Period{StartsOn: seguro.StartsOn, EndsOn: seguro.EndsOn}
+	}
+	out := make(map[uuid.UUID]bool, len(seguros))
+	for i, seguro := range seguros {
+		others := make([]Period, 0, len(periods)-1)
+		others = append(others, periods[:i]...)
+		others = append(others, periods[i+1:]...)
+		out[seguro.ID] = SeguroRenewed(periods[i], others, today)
+	}
+	return out
+}
+
 func (s *Service) UpdateSeguro(ctx context.Context, userID, seguroID uuid.UUID, req updateSeguroRequest) (db.Seguro, error) {
 	if _, err := s.authorizeSeguro(ctx, userID, seguroID); err != nil {
 		return db.Seguro{}, err
@@ -263,6 +302,11 @@ type Upcoming struct {
 	Status        string
 	DueOn         time.Time
 	RemainingDays int
+
+	// Renewed is true for a policy another one has taken over from (SeguroRenewed). Its
+	// own status still reads vencido or vence_em_breve — that is its history — but it is
+	// no longer something the owner has to act on.
+	Renewed bool
 }
 
 // ListUpcoming returns every obligation and policy on a vehicle, status already computed.
@@ -288,13 +332,14 @@ func (s *Service) ListUpcoming(ctx context.Context, userID, vehicleID uuid.UUID)
 		out = append(out, Upcoming{
 			ID:            o.ID,
 			Kind:          o.Kind,
-			Label:         strings.ToUpper(o.Kind) + " " + strconv.Itoa(int(o.ReferenceYear)),
+			Label:         obligationLabel(o.Kind, o.ReferenceYear),
 			Status:        string(status),
 			DueOn:         o.DueOn,
 			RemainingDays: remainingDays,
 		})
 	}
 
+	renewed := renewalsOf(seguros, today)
 	for _, seguro := range seguros {
 		status, remainingDays := ComputeSeguroStatus(seguro.StartsOn, seguro.EndsOn, today)
 		out = append(out, Upcoming{
@@ -305,7 +350,22 @@ func (s *Service) ListUpcoming(ctx context.Context, userID, vehicleID uuid.UUID)
 			// The end of cover is the date that matters for an alert.
 			DueOn:         seguro.EndsOn,
 			RemainingDays: remainingDays,
+			Renewed:       renewed[seguro.ID],
 		})
 	}
 	return out, nil
+}
+
+// obligationLabel is how an obligation is named on the alerts list: "IPVA 2026",
+// "Licenciamento 2026". IPVA is an acronym; licenciamento is a word, and shouting it in
+// capitals made it look like an error code.
+func obligationLabel(kind string, referenceYear int32) string {
+	name := kind
+	switch kind {
+	case "ipva":
+		name = "IPVA"
+	case "licenciamento":
+		name = "Licenciamento"
+	}
+	return name + " " + strconv.Itoa(int(referenceYear))
 }

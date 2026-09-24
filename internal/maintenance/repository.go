@@ -302,15 +302,29 @@ func (r *Repository) PlanByID(ctx context.Context, planID uuid.UUID) (db.GetMain
 	return plan, nil
 }
 
-func (r *Repository) CreatePlan(ctx context.Context, params db.CreateMaintenancePlanParams) (db.MaintenancePlan, error) {
-	plan, err := r.queries.CreateMaintenancePlan(ctx, params)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return db.MaintenancePlan{}, ErrIDTaken
+// CreateOrReactivatePlan is the owner adding an item. An inactive plan for the same item
+// comes back to life; an active one is reported through existing, with created false, so
+// the service can tell a retry of the same request (same id) from a real duplicate.
+func (r *Repository) CreateOrReactivatePlan(ctx context.Context, params db.CreateOrReactivateMaintenancePlanParams) (plan db.MaintenancePlan, created bool, err error) {
+	plan, err = r.queries.CreateOrReactivateMaintenancePlan(ctx, params)
+	if err == nil {
+		return plan, true, nil
 	}
-	if err != nil {
-		return db.MaintenancePlan{}, fmt.Errorf("create maintenance plan: %w", err)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return db.MaintenancePlan{}, false, fmt.Errorf("create maintenance plan: %w", err)
 	}
-	return plan, nil
+	existing, err := r.queries.GetActiveMaintenancePlanForItem(ctx, db.GetActiveMaintenancePlanForItemParams{
+		VehicleID: params.VehicleID, MaintenanceItemID: params.MaintenanceItemID,
+	})
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// The plan went inactive between the two statements. Rare enough that asking the
+		// client to retry is the honest answer.
+		return db.MaintenancePlan{}, false, ErrIDTaken
+	case err != nil:
+		return db.MaintenancePlan{}, false, fmt.Errorf("get active maintenance plan: %w", err)
+	}
+	return existing, false, nil
 }
 
 func (r *Repository) UpdatePlan(ctx context.Context, params db.UpdateMaintenancePlanParams) (db.MaintenancePlan, error) {

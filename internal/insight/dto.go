@@ -12,12 +12,16 @@ import (
 
 // Dashboard is the main screen in one response.
 type Dashboard struct {
-	Vehicle           dashboardVehicle    `json:"vehicle"`
-	Odometer          dashboardOdometer   `json:"odometer"`
-	Alerts            dashboardAlerts     `json:"alerts"`
-	Profile           dashboardProfile    `json:"profile"`
-	Costs             dashboardCosts      `json:"costs"`
-	LastAbastecimento *lastAbastecimento  `json:"last_abastecimento"`
+	Vehicle           dashboardVehicle   `json:"vehicle"`
+	Odometer          dashboardOdometer  `json:"odometer"`
+	Alerts            dashboardAlerts    `json:"alerts"`
+	Profile           dashboardProfile   `json:"profile"`
+	Costs             dashboardCosts     `json:"costs"`
+	LastAbastecimento *lastAbastecimento `json:"last_abastecimento"`
+
+	// Upcoming is what comes next among the things that are fine today, most advanced
+	// first, at most three. Same shape as an alert, with severity "em_dia". Never null.
+	Upcoming []Alert `json:"upcoming"`
 }
 
 // dashboardProfile is what the main screen needs to decide whether to show one discreet
@@ -61,17 +65,24 @@ type dashboardAlerts struct {
 	// new vehicle has one per suggested plan.
 	NeedsBaseline int `json:"needs_baseline"`
 
+	// UnknownHistory counts every maintenance item whose next due date cannot be computed
+	// because nobody knows when it was last done — including the ones the owner already
+	// answered "não sei" about, which needs_baseline stops counting. It is what the verdict
+	// reads: with nothing overdue and a dozen items unknown, "tudo em dia" would be a claim
+	// the app cannot back.
+	UnknownHistory int `json:"unknown_history"`
+
 	// Items carries only the most urgent few. The full list is GET /alerts.
 	Items []Alert `json:"items"`
 }
 
 type lastAbastecimento struct {
-	ID                 string                      `json:"id"`
-	OccurredOn         string                      `json:"occurred_on"`
-	TotalCostCents     int64                       `json:"total_cost_cents"`
-	VolumeMl           int32                       `json:"volume_ml"`
-	PricePerLiterCents int64                       `json:"price_per_liter_cents"`
-	Fuel               string                      `json:"fuel"`
+	ID                 string                       `json:"id"`
+	OccurredOn         string                       `json:"occurred_on"`
+	TotalCostCents     int64                        `json:"total_cost_cents"`
+	VolumeMl           int32                        `json:"volume_ml"`
+	PricePerLiterCents int64                        `json:"price_per_liter_cents"`
+	Fuel               string                       `json:"fuel"`
 	Consumption        lastAbastecimentoConsumption `json:"consumption"`
 }
 
@@ -169,6 +180,7 @@ func buildDashboard(
 		},
 		Costs:             toDashboardCosts(costs, costMonths, since),
 		LastAbastecimento: toLastAbastecimento(lastFill),
+		Upcoming:          []Alert{},
 	}
 }
 

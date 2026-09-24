@@ -4,6 +4,7 @@
       {
         "alert_days": "number",
         "alert_km": "number",
+        "baseline": "null",
         "due_at_km": "null",
         "due_on": "null",
         "history_priority": "number",

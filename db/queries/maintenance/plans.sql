@@ -10,6 +10,45 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (vehicle_id, maintenance_item_id) DO NOTHING
 RETURNING *;
 
+-- The owner adding an item to follow, from the app.
+--
+-- A plan the owner switched off earlier is the same row — (vehicle, item) is unique — so
+-- adding it again REACTIVATES it instead of answering "já tem um plano" forever. That 409 was
+-- a dead end: the list hid the inactive plan and the create refused to bring it back.
+--
+-- The row takes the requested id on the way back in, which is what keeps a retried request
+-- idempotent: the second attempt finds an active plan with its own id and gets it back. No
+-- other table references a plan's id; the history hangs off the item.
+--
+-- An ACTIVE plan for the item is left untouched and returns no row; the service tells a
+-- retry of this same request apart from a genuine duplicate by the id.
+-- name: CreateOrReactivateMaintenancePlan :one
+INSERT INTO maintenance_plans (
+    id, vehicle_id, maintenance_item_id,
+    interval_km, interval_months, interval_days,
+    alert_km, alert_days, origin, strategy, notes
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+ON CONFLICT (vehicle_id, maintenance_item_id) DO UPDATE
+SET id              = EXCLUDED.id,
+    is_active       = true,
+    interval_km     = EXCLUDED.interval_km,
+    interval_months = EXCLUDED.interval_months,
+    interval_days   = EXCLUDED.interval_days,
+    alert_km        = EXCLUDED.alert_km,
+    alert_days      = EXCLUDED.alert_days,
+    origin          = EXCLUDED.origin,
+    strategy        = EXCLUDED.strategy,
+    notes           = COALESCE(EXCLUDED.notes, maintenance_plans.notes),
+    updated_at      = now()
+WHERE NOT maintenance_plans.is_active
+RETURNING *;
+
+-- name: GetActiveMaintenancePlanForItem :one
+SELECT *
+FROM maintenance_plans
+WHERE vehicle_id = $1 AND maintenance_item_id = $2 AND is_active;
+
 -- Used when the owner ANSWERS a question about how their car is built, which is a decision
 -- rather than a suggestion: it must land even if a plan for the item is already there.
 --

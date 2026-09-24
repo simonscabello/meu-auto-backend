@@ -31,7 +31,13 @@ WITH entries AS (
               JOIN maintenance_items i ON i.id = ri.maintenance_item_id
              WHERE ri.maintenance_record_id = r.id) AS title,
            r.workshop_name                          AS subtitle,
-           r.total_cost_cents                       AS amount_cents,
+           -- The total when the owner typed one, otherwise what the lines add up to. A
+           -- record with R$ 450 on its lines and no total used to show no amount at all.
+           CASE WHEN r.total_cost_cents > 0 THEN r.total_cost_cents
+                ELSE (SELECT SUM(ri.cost_cents)
+                        FROM maintenance_record_items ri
+                       WHERE ri.maintenance_record_id = r.id)
+           END::bigint                              AS amount_cents,
            r.mileage_km                             AS mileage_km,
            (SELECT bool_and(i.kind = 'care')
               FROM maintenance_record_items ri
@@ -48,7 +54,9 @@ WITH entries AS (
            o.occurred_on,
            o.created_at,
            NULL::text,
-           o.source,
+           -- Words for a person, not the column value: "manual" says nothing a reading
+           -- does not already say, and "correction" reached the screen in English.
+           CASE o.source WHEN 'correction' THEN 'Correção' END,
            NULL::bigint,
            o.mileage_km,
            NULL::boolean
@@ -79,7 +87,9 @@ WITH entries AS (
            ob.created_at,
            NULL::text,
            ob.reference_year::text,
-           ob.paid_amount_cents,
+           -- Paid without saying how much: the amount it was due for is the best figure
+           -- there is, and nothing at all made a paid IPVA cost R$ 0,00.
+           COALESCE(ob.paid_amount_cents, ob.amount_cents),
            NULL::integer,
            NULL::boolean
     FROM vehicle_obligations ob
@@ -107,13 +117,20 @@ LIMIT sqlc.arg('page_size');
 -- field is frozen for the published app (see dashboardCosts in dto.go).
 -- name: SumVehicleCosts :one
 SELECT
-    COALESCE((SELECT SUM(r.total_cost_cents)
+    -- Same rule as the timeline row: the typed total, or the sum of the lines when no total
+    -- was given. The two must agree, or the history and the cost screen tell different
+    -- stories about the same service.
+    COALESCE((SELECT SUM(CASE WHEN r.total_cost_cents > 0 THEN r.total_cost_cents
+                              ELSE COALESCE((SELECT SUM(ri.cost_cents)
+                                               FROM maintenance_record_items ri
+                                              WHERE ri.maintenance_record_id = r.id), 0)
+                         END)
                 FROM maintenance_records r
                WHERE r.vehicle_id = sqlc.arg('vehicle_id')
                  AND r.deleted_at IS NULL
                  AND r.occurred_on >= sqlc.arg('since')), 0)::bigint AS maintenance_cents,
 
-    COALESCE((SELECT SUM(ob.paid_amount_cents)
+    COALESCE((SELECT SUM(COALESCE(ob.paid_amount_cents, ob.amount_cents))
                 FROM vehicle_obligations ob
                WHERE ob.vehicle_id = sqlc.arg('vehicle_id')
                  AND ob.paid_on IS NOT NULL

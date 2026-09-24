@@ -13,6 +13,7 @@
         "policy_number": "string",
         "premium_cents": "number",
         "remaining_days": "number",
+        "renewed": "boolean",
         "starts_on": "string",
         "status": "string",
         "updated_at": "string",

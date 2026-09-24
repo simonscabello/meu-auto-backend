@@ -116,6 +116,40 @@ func (q *Queries) GetObligationForUser(ctx context.Context, arg GetObligationFor
 	return i, err
 }
 
+const getObligationForYear = `-- name: GetObligationForYear :one
+SELECT id, vehicle_id, kind, reference_year, due_on, amount_cents, paid_on, paid_amount_cents, notes, recorded_by_user_id, created_at, updated_at
+FROM vehicle_obligations
+WHERE vehicle_id = $1 AND kind = $2 AND reference_year = $3
+`
+
+type GetObligationForYearParams struct {
+	VehicleID     uuid.UUID
+	Kind          string
+	ReferenceYear int32
+}
+
+// The row a create collided with. Read only after a conflict, to tell the client retrying
+// a request that already landed (same id) from a genuine second IPVA for the same year.
+func (q *Queries) GetObligationForYear(ctx context.Context, arg GetObligationForYearParams) (VehicleObligation, error) {
+	row := q.db.QueryRow(ctx, getObligationForYear, arg.VehicleID, arg.Kind, arg.ReferenceYear)
+	var i VehicleObligation
+	err := row.Scan(
+		&i.ID,
+		&i.VehicleID,
+		&i.Kind,
+		&i.ReferenceYear,
+		&i.DueOn,
+		&i.AmountCents,
+		&i.PaidOn,
+		&i.PaidAmountCents,
+		&i.Notes,
+		&i.RecordedByUserID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listObligationsForVehicle = `-- name: ListObligationsForVehicle :many
 SELECT id, vehicle_id, kind, reference_year, due_on, amount_cents, paid_on, paid_amount_cents, notes, recorded_by_user_id, created_at, updated_at
 FROM vehicle_obligations

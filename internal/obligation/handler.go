@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/simonscabello/meu-auto-backend/internal/obligation/db"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/apperr"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/auth"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/httpx"
@@ -161,9 +162,10 @@ func (h *Handler) listSeguros(w http.ResponseWriter, r *http.Request) {
 	}
 
 	today := h.service.Today()
+	renewed := h.service.RenewedAmong(seguros)
 	out := make([]seguroResponse, 0, len(seguros))
 	for _, seguro := range seguros {
-		out = append(out, toSeguroResponse(seguro, today))
+		out = append(out, toSeguroResponse(seguro, today, renewed[seguro.ID]))
 	}
 	httpx.JSON(w, r, http.StatusOK, map[string]any{"data": out})
 }
@@ -186,7 +188,7 @@ func (h *Handler) createSeguro(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, err)
 		return
 	}
-	httpx.JSON(w, r, http.StatusCreated, toSeguroResponse(seguro, h.service.Today()))
+	h.renderSeguro(w, r, http.StatusCreated, seguro)
 }
 
 func (h *Handler) getSeguro(w http.ResponseWriter, r *http.Request) {
@@ -201,7 +203,7 @@ func (h *Handler) getSeguro(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, err)
 		return
 	}
-	httpx.JSON(w, r, http.StatusOK, toSeguroResponse(seguro, h.service.Today()))
+	h.renderSeguro(w, r, http.StatusOK, seguro)
 }
 
 func (h *Handler) updateSeguro(w http.ResponseWriter, r *http.Request) {
@@ -222,7 +224,7 @@ func (h *Handler) updateSeguro(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, err)
 		return
 	}
-	httpx.JSON(w, r, http.StatusOK, toSeguroResponse(seguro, h.service.Today()))
+	h.renderSeguro(w, r, http.StatusOK, seguro)
 }
 
 func (h *Handler) deleteSeguro(w http.ResponseWriter, r *http.Request) {
@@ -261,4 +263,15 @@ func callerID(r *http.Request) (uuid.UUID, error) {
 		return uuid.Nil, apperr.Unauthorized("Autenticação necessária.")
 	}
 	return userID, nil
+}
+
+// renderSeguro writes one policy, with whether another one on the vehicle took over
+// from it — the same answer the list gives.
+func (h *Handler) renderSeguro(w http.ResponseWriter, r *http.Request, status int, seguro db.Seguro) {
+	renewed, err := h.service.IsRenewed(r.Context(), seguro)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, status, toSeguroResponse(seguro, h.service.Today(), renewed))
 }

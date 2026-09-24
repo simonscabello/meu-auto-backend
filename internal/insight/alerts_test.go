@@ -95,7 +95,7 @@ func TestObligationAlertsMapKindAndReference(t *testing.T) {
 		{ID: seguroID, Kind: "seguro", Label: "Porto Seguro",
 			Status: string(obligation.SeguroDueSoon), DueOn: date(2026, time.August, 28), RemainingDays: 7},
 		// Settled and comfortable states are not alerts.
-		{ID: uuid.New(), Kind: "licenciamento", Label: "LICENCIAMENTO 2026",
+		{ID: uuid.New(), Kind: "licenciamento", Label: "Licenciamento 2026",
 			Status: string(obligation.StatusPaid), DueOn: date(2026, time.May, 1), RemainingDays: -112},
 	})
 
@@ -116,26 +116,135 @@ func TestObligationAlertsMapKindAndReference(t *testing.T) {
 	}
 }
 
-// One list, many sources: the ordering has to be meaningful across all of them.
+// One list, many sources: the ordering has to be meaningful across all of them. Inside a
+// severity, the item furthest through its own window comes first, whatever it is measured
+// in — a distance-only alert is not pushed to the back for having no date.
 func TestSortAlertsOrdersAcrossSources(t *testing.T) {
 	t.Parallel()
 
 	alerts := []Alert{
-		{Kind: KindSeguro, Severity: SeverityDueSoon, Title: "Porto Seguro", RemainingDays: p(int32(7))},
-		{Kind: KindMaintenance, Severity: SeverityOverdue, Title: "Correia dentada", RemainingDays: p(int32(-40))},
-		{Kind: KindWarranty, Severity: SeverityDueSoon, Title: "Bateria", RemainingDays: p(int32(3))},
-		{Kind: KindIPVA, Severity: SeverityOverdue, Title: "IPVA 2026", RemainingDays: p(int32(-143))},
-		// Distance-only: no date at all, so it must sort after the dated ones in its band
-		// rather than jumping ahead on a nil.
-		{Kind: KindMaintenance, Severity: SeverityDueSoon, Title: "Pneus", RemainingKm: p(int32(400))},
+		{Kind: KindSeguro, Severity: SeverityDueSoon, Title: "Porto Seguro", urgency: 0.98},
+		{Kind: KindMaintenance, Severity: SeverityOverdue, Title: "Correia dentada", urgency: 1.03},
+		{Kind: KindWarranty, Severity: SeverityDueSoon, Title: "Bateria", urgency: 0.9},
+		{Kind: KindIPVA, Severity: SeverityOverdue, Title: "IPVA 2026", urgency: 1.39},
+		{Kind: KindMaintenance, Severity: SeverityDueSoon, Title: "Pneus", urgency: 0.99},
 	}
 
 	sortAlerts(alerts)
 
-	want := []string{"IPVA 2026", "Correia dentada", "Bateria", "Porto Seguro", "Pneus"}
+	want := []string{"IPVA 2026", "Correia dentada", "Pneus", "Porto Seguro", "Bateria"}
 	for i, title := range want {
 		if alerts[i].Title != title {
 			t.Errorf("position %d: %q, want %q", i, alerts[i].Title, title)
+		}
+	}
+}
+
+// Maintenance alerts carry the due engine's own urgency, so an oil change 41.000 km late
+// outranks a habit due today — the order the dashboard's five-item cap depends on.
+func TestMaintenanceAlertsCarryTheEngineUrgency(t *testing.T) {
+	t.Parallel()
+
+	today := date(2026, time.August, 21)
+	habitPlan := maintenance.Plan{ID: uuid.New(), ItemID: uuid.New(), ItemName: "Calibrar os pneus",
+		ItemKind: maintenance.KindCare, IntervalDays: p(int32(15)), AlertDays: 2}
+	oilPlan := maintenance.Plan{ID: uuid.New(), ItemID: uuid.New(), ItemName: "Troca de óleo",
+		ItemKind: maintenance.KindMaintenance, IntervalKm: p(int32(10000)),
+		IntervalMonths: p(int32(12)), AlertKm: 1000, AlertDays: 30}
+
+	dues := maintenance.ComputeAll([]maintenance.Plan{habitPlan, oilPlan},
+		map[uuid.UUID]maintenance.Performed{
+			habitPlan.ItemID: {OccurredOn: date(2026, time.August, 6)},
+			oilPlan.ItemID:   {OccurredOn: date(2026, time.May, 1), MileageKm: p(int32(60000))},
+		}, 111000, today)
+
+	alerts := maintenanceAlerts(dues)
+	sortAlerts(alerts)
+
+	if len(alerts) != 2 || alerts[0].Title != "Troca de óleo" {
+		t.Fatalf("alerts = %+v, want the oil change first", alerts)
+	}
+}
+
+// An expired warranty has nothing left to act on. It used to stay on the list as "vencido"
+// for as long as the record existed.
+func TestWarrantyAlertsDropExpiredWarranties(t *testing.T) {
+	t.Parallel()
+
+	got := warrantyAlerts([]maintenance.Warranty{
+		{RecordID: uuid.New(), ItemName: "Pastilhas", Status: maintenance.StatusOverdue,
+			RemainingDays: p(int32(-115))},
+		{RecordID: uuid.New(), ItemName: "Bateria", Status: maintenance.StatusDueSoon,
+			RemainingDays: p(int32(10))},
+	})
+
+	if len(got) != 1 || got[0].Title != "Bateria" {
+		t.Fatalf("got %+v, want only the warranty still running", got)
+	}
+}
+
+// A renewed policy is history. Its alert used to keep saying the car was uninsured beside
+// the policy that covers it.
+func TestObligationAlertsSkipARenewedPolicy(t *testing.T) {
+	t.Parallel()
+
+	got := obligationAlerts([]obligation.Upcoming{
+		{ID: uuid.New(), Kind: "seguro", Label: "Apólice antiga",
+			Status: string(obligation.SeguroExpired), RemainingDays: -12, Renewed: true},
+		{ID: uuid.New(), Kind: "seguro", Label: "Sem renovação",
+			Status: string(obligation.SeguroExpired), RemainingDays: -3},
+	})
+
+	// A policy alert is titled "Seguro" and carries the insurer as its subtitle.
+	if len(got) != 1 || got[0].Subtitle == nil || *got[0].Subtitle != "Sem renovação" {
+		t.Fatalf("got %+v, want only the policy nobody renewed", got)
+	}
+	if got[0].Title != "Seguro" {
+		t.Errorf("title = %q, want Seguro", got[0].Title)
+	}
+}
+
+// What comes next when nothing needs attention: maintenance on track and obligations not
+// yet close, habits and renewed policies left out, most advanced first, capped.
+func TestUpcomingItemsListWhatComesNext(t *testing.T) {
+	t.Parallel()
+
+	today := date(2026, time.August, 21)
+	oil := maintenance.Plan{ID: uuid.New(), ItemID: uuid.New(), ItemName: "Troca de óleo",
+		ItemKind: maintenance.KindMaintenance, IntervalKm: p(int32(10000)), AlertKm: 1000}
+	belt := maintenance.Plan{ID: uuid.New(), ItemID: uuid.New(), ItemName: "Correia dentada",
+		ItemKind: maintenance.KindMaintenance, IntervalKm: p(int32(60000)), AlertKm: 1000}
+	habit := maintenance.Plan{ID: uuid.New(), ItemID: uuid.New(), ItemName: "Calibrar os pneus",
+		ItemKind: maintenance.KindCare, IntervalDays: p(int32(15)), AlertDays: 2}
+	unknown := maintenance.Plan{ID: uuid.New(), ItemID: uuid.New(), ItemName: "Filtro de ar",
+		ItemKind: maintenance.KindMaintenance, IntervalKm: p(int32(20000)), AlertKm: 1000}
+
+	dues := maintenance.ComputeAll([]maintenance.Plan{oil, belt, habit, unknown},
+		map[uuid.UUID]maintenance.Performed{
+			oil.ItemID:   {OccurredOn: date(2026, time.June, 1), MileageKm: p(int32(50000))}, // 60% gone
+			belt.ItemID:  {OccurredOn: date(2026, time.June, 1), MileageKm: p(int32(50000))}, // 10% gone
+			habit.ItemID: {OccurredOn: date(2026, time.August, 18)},
+		}, 56000, today)
+
+	got := upcomingItems(dues, []obligation.Upcoming{
+		{ID: uuid.New(), Kind: "ipva", Label: "IPVA 2027",
+			Status: string(obligation.StatusPending), DueOn: date(2027, time.January, 20), RemainingDays: 152},
+		{ID: uuid.New(), Kind: "seguro", Label: "Renovada",
+			Status: string(obligation.SeguroActive), RemainingDays: 200, Renewed: true},
+		{ID: uuid.New(), Kind: "licenciamento", Label: "Licenciamento 2026",
+			Status: string(obligation.StatusPaid), RemainingDays: -30},
+	}, 3)
+
+	want := []string{"Troca de óleo", "IPVA 2027", "Correia dentada"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d items %+v, want %v", len(got), got, want)
+	}
+	for i, title := range want {
+		if got[i].Title != title {
+			t.Errorf("position %d: %q, want %q", i, got[i].Title, title)
+		}
+		if got[i].Severity != SeverityOnTrack {
+			t.Errorf("%s: severity = %q, want em_dia", got[i].Title, got[i].Severity)
 		}
 	}
 }

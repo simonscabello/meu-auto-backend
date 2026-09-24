@@ -177,9 +177,12 @@ func (r *Repository) SoftDelete(ctx context.Context, vehicleID uuid.UUID) error 
 
 // NeighbouringReadings returns the readings immediately before and after a date, for the
 // monotonicity check. A missing neighbour is reported as a nil pointer, not an error.
-func (r *Repository) NeighbouringReadings(ctx context.Context, vehicleID uuid.UUID, occurredOn time.Time) (previous, next *db.OdometerReading, err error) {
+//
+// excludeSourceID is the maintenance record or abastecimento being edited, whose own
+// reading must not count as its neighbour. nil for a new reading.
+func (r *Repository) NeighbouringReadings(ctx context.Context, vehicleID uuid.UUID, occurredOn time.Time, excludeSourceID *uuid.UUID) (previous, next *db.OdometerReading, err error) {
 	before, err := r.queries.GetPreviousOdometerReading(ctx, db.GetPreviousOdometerReadingParams{
-		VehicleID: vehicleID, OccurredOn: occurredOn,
+		VehicleID: vehicleID, OccurredOn: occurredOn, ExcludeSourceID: excludeSourceID,
 	})
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
@@ -190,7 +193,7 @@ func (r *Repository) NeighbouringReadings(ctx context.Context, vehicleID uuid.UU
 	}
 
 	after, err := r.queries.GetNextOdometerReading(ctx, db.GetNextOdometerReadingParams{
-		VehicleID: vehicleID, OccurredOn: occurredOn,
+		VehicleID: vehicleID, OccurredOn: occurredOn, ExcludeSourceID: excludeSourceID,
 	})
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):

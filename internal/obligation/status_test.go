@@ -121,3 +121,33 @@ func TestComputeSeguroStatusSingleDayPolicy(t *testing.T) {
 		t.Errorf("remaining days = %d, want 0", days)
 	}
 }
+
+// A renewal takes over from the old policy when it follows on without a gap, or once it is
+// in force. A future policy after a gap does not: until it starts the car has no cover.
+func TestSeguroRenewed(t *testing.T) {
+	t.Parallel()
+
+	old := Period{StartsOn: date(2025, time.September, 1), EndsOn: date(2026, time.August, 31)}
+	today := date(2026, time.September, 10)
+
+	cases := []struct {
+		name   string
+		others []Period
+		want   bool
+	}{
+		{"no other policy", nil, false},
+		{"continuous renewal", []Period{{StartsOn: date(2026, time.September, 1), EndsOn: date(2027, time.August, 31)}}, true},
+		{"renewal a week early", []Period{{StartsOn: date(2026, time.August, 24), EndsOn: date(2027, time.August, 23)}}, true},
+		{"gap, new policy already in force", []Period{{StartsOn: date(2026, time.September, 5), EndsOn: date(2027, time.September, 4)}}, true},
+		{"gap, new policy not started yet", []Period{{StartsOn: date(2026, time.October, 1), EndsOn: date(2027, time.September, 30)}}, false},
+		{"an older policy is not a renewal", []Period{{StartsOn: date(2024, time.September, 1), EndsOn: date(2025, time.August, 31)}}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SeguroRenewed(old, tc.others, today); got != tc.want {
+				t.Errorf("SeguroRenewed = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

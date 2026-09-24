@@ -40,18 +40,30 @@ LIMIT sqlc.arg('page_size');
 -- side, and scanning that NULL into an int32 fails at runtime. Splitting them makes
 -- "no neighbour" an unambiguous pgx.ErrNoRows.
 
+--
+-- exclude_source_id names the event being EDITED. A record or a fill that moves its own
+-- mileage must not be compared against the reading it produced itself: correcting a typo
+-- from 105.000 to 104.000 km on the latest record used to be refused as a rollback against
+-- its own old value. NULL for a new reading, which has nothing of its own to skip.
+
 -- name: GetPreviousOdometerReading :one
 SELECT *
 FROM odometer_readings
-WHERE vehicle_id = $1
-  AND occurred_on <= $2
+WHERE vehicle_id = sqlc.arg(vehicle_id)
+  AND occurred_on <= sqlc.arg(occurred_on)
+  AND (sqlc.narg(exclude_source_id)::uuid IS NULL
+       OR (source_maintenance_id IS DISTINCT FROM sqlc.narg(exclude_source_id)::uuid
+           AND source_abastecimento_id IS DISTINCT FROM sqlc.narg(exclude_source_id)::uuid))
 ORDER BY occurred_on DESC, created_at DESC
 LIMIT 1;
 
 -- name: GetNextOdometerReading :one
 SELECT *
 FROM odometer_readings
-WHERE vehicle_id = $1
-  AND occurred_on > $2
+WHERE vehicle_id = sqlc.arg(vehicle_id)
+  AND occurred_on > sqlc.arg(occurred_on)
+  AND (sqlc.narg(exclude_source_id)::uuid IS NULL
+       OR (source_maintenance_id IS DISTINCT FROM sqlc.narg(exclude_source_id)::uuid
+           AND source_abastecimento_id IS DISTINCT FROM sqlc.narg(exclude_source_id)::uuid))
 ORDER BY occurred_on ASC, created_at ASC
 LIMIT 1;

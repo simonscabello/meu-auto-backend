@@ -74,6 +74,90 @@ func (q *Queries) CreateMaintenancePlan(ctx context.Context, arg CreateMaintenan
 	return i, err
 }
 
+const createOrReactivateMaintenancePlan = `-- name: CreateOrReactivateMaintenancePlan :one
+INSERT INTO maintenance_plans (
+    id, vehicle_id, maintenance_item_id,
+    interval_km, interval_months, interval_days,
+    alert_km, alert_days, origin, strategy, notes
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+ON CONFLICT (vehicle_id, maintenance_item_id) DO UPDATE
+SET id              = EXCLUDED.id,
+    is_active       = true,
+    interval_km     = EXCLUDED.interval_km,
+    interval_months = EXCLUDED.interval_months,
+    interval_days   = EXCLUDED.interval_days,
+    alert_km        = EXCLUDED.alert_km,
+    alert_days      = EXCLUDED.alert_days,
+    origin          = EXCLUDED.origin,
+    strategy        = EXCLUDED.strategy,
+    notes           = COALESCE(EXCLUDED.notes, maintenance_plans.notes),
+    updated_at      = now()
+WHERE NOT maintenance_plans.is_active
+RETURNING id, vehicle_id, maintenance_item_id, interval_km, interval_months, interval_days, alert_km, alert_days, origin, is_active, created_at, updated_at, strategy, history_status, notes
+`
+
+type CreateOrReactivateMaintenancePlanParams struct {
+	ID                uuid.UUID
+	VehicleID         uuid.UUID
+	MaintenanceItemID uuid.UUID
+	IntervalKm        *int32
+	IntervalMonths    *int32
+	IntervalDays      *int32
+	AlertKm           int32
+	AlertDays         int32
+	Origin            string
+	Strategy          string
+	Notes             *string
+}
+
+// The owner adding an item to follow, from the app.
+//
+// A plan the owner switched off earlier is the same row — (vehicle, item) is unique — so
+// adding it again REACTIVATES it instead of answering "já tem um plano" forever. That 409 was
+// a dead end: the list hid the inactive plan and the create refused to bring it back.
+//
+// The row takes the requested id on the way back in, which is what keeps a retried request
+// idempotent: the second attempt finds an active plan with its own id and gets it back. No
+// other table references a plan's id; the history hangs off the item.
+//
+// An ACTIVE plan for the item is left untouched and returns no row; the service tells a
+// retry of this same request apart from a genuine duplicate by the id.
+func (q *Queries) CreateOrReactivateMaintenancePlan(ctx context.Context, arg CreateOrReactivateMaintenancePlanParams) (MaintenancePlan, error) {
+	row := q.db.QueryRow(ctx, createOrReactivateMaintenancePlan,
+		arg.ID,
+		arg.VehicleID,
+		arg.MaintenanceItemID,
+		arg.IntervalKm,
+		arg.IntervalMonths,
+		arg.IntervalDays,
+		arg.AlertKm,
+		arg.AlertDays,
+		arg.Origin,
+		arg.Strategy,
+		arg.Notes,
+	)
+	var i MaintenancePlan
+	err := row.Scan(
+		&i.ID,
+		&i.VehicleID,
+		&i.MaintenanceItemID,
+		&i.IntervalKm,
+		&i.IntervalMonths,
+		&i.IntervalDays,
+		&i.AlertKm,
+		&i.AlertDays,
+		&i.Origin,
+		&i.IsActive,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Strategy,
+		&i.HistoryStatus,
+		&i.Notes,
+	)
+	return i, err
+}
+
 const deactivateMaintenancePlan = `-- name: DeactivateMaintenancePlan :execrows
 UPDATE maintenance_plans
 SET is_active = false, updated_at = now()
@@ -136,6 +220,40 @@ func (q *Queries) DemoteImpossiblePlans(ctx context.Context, arg DemoteImpossibl
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const getActiveMaintenancePlanForItem = `-- name: GetActiveMaintenancePlanForItem :one
+SELECT id, vehicle_id, maintenance_item_id, interval_km, interval_months, interval_days, alert_km, alert_days, origin, is_active, created_at, updated_at, strategy, history_status, notes
+FROM maintenance_plans
+WHERE vehicle_id = $1 AND maintenance_item_id = $2 AND is_active
+`
+
+type GetActiveMaintenancePlanForItemParams struct {
+	VehicleID         uuid.UUID
+	MaintenanceItemID uuid.UUID
+}
+
+func (q *Queries) GetActiveMaintenancePlanForItem(ctx context.Context, arg GetActiveMaintenancePlanForItemParams) (MaintenancePlan, error) {
+	row := q.db.QueryRow(ctx, getActiveMaintenancePlanForItem, arg.VehicleID, arg.MaintenanceItemID)
+	var i MaintenancePlan
+	err := row.Scan(
+		&i.ID,
+		&i.VehicleID,
+		&i.MaintenanceItemID,
+		&i.IntervalKm,
+		&i.IntervalMonths,
+		&i.IntervalDays,
+		&i.AlertKm,
+		&i.AlertDays,
+		&i.Origin,
+		&i.IsActive,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Strategy,
+		&i.HistoryStatus,
+		&i.Notes,
+	)
+	return i, err
 }
 
 const getMaintenancePlan = `-- name: GetMaintenancePlan :one

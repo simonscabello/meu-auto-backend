@@ -333,16 +333,16 @@ func TestComputeAllBreaksTiesByUrgency(t *testing.T) {
 
 	today := date(2026, time.August, 21)
 
-	// Three overdue plans, by increasing lateness.
-	slightly := plan(nil, p(int32(6)), nil) // due 2026-08-10, 11 days late
+	// Three overdue plans. Urgency is how far through its OWN interval each one is, so the
+	// distance-only plan — 15.000 km into a 10.000 km interval, 1,5 intervals — outranks the
+	// dated ones even though it has no date at all.
+	slightly := plan(nil, p(int32(6)), nil) // due 2026-08-10, 11 days late: ~1,06
 	slightly.ItemName = "Um pouco vencido"
 
-	badly := plan(nil, p(int32(6)), nil) // due 2026-07-01, 51 days late
+	badly := plan(nil, p(int32(6)), nil) // due 2026-07-01, 51 days late: ~1,28
 	badly.ItemName = "Muito vencido"
 
-	// Overdue on distance only: no date at all, so it must sort after the dated ones
-	// rather than jumping the queue on a nil.
-	byDistance := plan(p(int32(10000)), nil, nil)
+	byDistance := plan(p(int32(10000)), nil, nil) // 5.000 km late: 1,5
 	byDistance.ItemName = "Vencido por km"
 
 	lastByItem := map[uuid.UUID]Performed{
@@ -360,11 +360,82 @@ func TestComputeAllBreaksTiesByUrgency(t *testing.T) {
 		}
 	}
 
-	want := []string{"Muito vencido", "Um pouco vencido", "Vencido por km"}
+	want := []string{"Vencido por km", "Muito vencido", "Um pouco vencido"}
 	for i, name := range want {
 		if got[i].Plan.ItemName != name {
 			t.Errorf("position %d: %q, want %q", i, got[i].Plan.ItemName, name)
 		}
+	}
+}
+
+// The case that replaced the old "days first, then kilometres" ordering. A habit due today
+// sorted ahead of an oil change tens of thousands of kilometres late, because the oil
+// change still had months left on its date — and the dashboard shows only the first few.
+func TestComputeAllPutsAFarOverdueDistanceAheadOfAHabitDueToday(t *testing.T) {
+	t.Parallel()
+
+	today := date(2026, time.August, 21)
+
+	habit := plan(nil, nil, p(int32(15)))
+	habit.ItemName = "Calibrar os pneus"
+
+	oil := plan(p(int32(10000)), p(int32(12)), nil)
+	oil.ItemName = "Troca de óleo"
+
+	lastByItem := map[uuid.UUID]Performed{
+		habit.ItemID: {OccurredOn: date(2026, time.August, 6)},
+		oil.ItemID:   {OccurredOn: date(2026, time.May, 1), MileageKm: p(int32(60000))},
+	}
+
+	got := ComputeAll([]Plan{habit, oil}, lastByItem, 111000, today)
+
+	if got[0].Plan.ItemName != "Troca de óleo" {
+		t.Errorf("first = %q, want the oil change 41.000 km late", got[0].Plan.ItemName)
+	}
+}
+
+// "Nunca foi feito" counts from the car being new: 0 km and the start of the year it was
+// built. On a 140.000 km car a 60.000 km belt is then overdue — the answer that used to
+// produce silence.
+func TestSinceNewBaselineMakesANeverReplacedItemOverdue(t *testing.T) {
+	t.Parallel()
+
+	belt := plan(p(int32(60000)), p(int32(48)), nil)
+	year := int32(2012)
+	baseline := SinceNewBaseline(&year)
+
+	got := ComputeDue(belt, &baseline, 140000, date(2026, time.August, 21))
+
+	if got.Status != StatusOverdue {
+		t.Fatalf("Status = %q, want vencido", got.Status)
+	}
+	if got.DueAtKm == nil || *got.DueAtKm != 60000 {
+		t.Errorf("DueAtKm = %v, want 60000 (0 km + interval)", got.DueAtKm)
+	}
+	if got.DueOn == nil || !got.DueOn.Equal(date(2016, time.January, 1)) {
+		t.Errorf("DueOn = %v, want 2016-01-01 (built 2012 + 48 months)", got.DueOn)
+	}
+}
+
+// With no year, "since new" still knows the distance — 0 km is a fact about any new car —
+// but has no date to count from, so the time dimension is left out rather than counted
+// from year one.
+func TestSinceNewBaselineWithoutAYearSkipsTheTimeDimension(t *testing.T) {
+	t.Parallel()
+
+	fluid := plan(p(int32(40000)), p(int32(24)), nil)
+	baseline := SinceNewBaseline(nil)
+
+	got := ComputeDue(fluid, &baseline, 30000, date(2026, time.August, 21))
+
+	if got.Status != StatusOnTrack {
+		t.Errorf("Status = %q, want em_dia (30.000 of 40.000 km, date unknown)", got.Status)
+	}
+	if got.DueOn != nil || got.RemainingDays != nil {
+		t.Errorf("DueOn = %v, RemainingDays = %v, want both nil", got.DueOn, got.RemainingDays)
+	}
+	if got.RemainingKm == nil || *got.RemainingKm != 10000 {
+		t.Errorf("RemainingKm = %v, want 10000", got.RemainingKm)
 	}
 }
 

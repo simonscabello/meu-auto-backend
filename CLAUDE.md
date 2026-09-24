@@ -63,6 +63,9 @@ This machine is Windows with Git Bash. Two things bite immediately:
   `export PATH="$PATH:/c/Program Files/Go/bin"` or nothing will build.
 - **Postgres runs on host port `5433`, not 5432** — the default was already taken by
   another project on this machine. `docker-compose.yml` and `.env.example` reflect this.
+  (As of September 2026 another project's container holds 5433 too. Nothing here depends
+  on the number: run a Postgres on any free port and point `DATABASE_URL` and
+  `TEST_DATABASE_URL` at it.)
 
 ```bash
 export PATH="$PATH:/c/Program Files/Go/bin"
@@ -157,6 +160,12 @@ gofmt -l .                           # see the CRLF note below before believing 
 - **`history_status` is not a record.** "Não sei" and "nunca foi feito" are different answers and neither is a `maintenance_record`, because a record asserts a date and a mileage that the person does not have. Writing one anyway would put a fabricated fact into the history whose whole value is being trustworthy.
 
 `GET .../maintenance-plans` **excludes** `not_applicable` unless asked; only the configuration surface passes `include_not_applicable=true`, because undoing has to be possible.
+
+**"Nunca foi feito" counts from the car being new** (`SinceNewBaseline`, `withSinceNewBaselines`). A plan with `history_status = never` and no record is measured from 0 km and the start of the year the car was built (`vehicle.AuthorizeVehicleForDue` supplies it); the plan says `baseline: "since_new"` and its `last_*` stay null, because nothing was performed. It is derived on every read and never stored, and a record always wins. The answer used to leave the plan without a baseline forever — the most dangerous answer produced silence.
+
+**The dashboard tells "unknown" from "fine", and "now" from "next".** `alerts.unknown_history` counts every maintenance item with no baseline, including those answered "não sei" (which `needs_baseline` drops — right for a prompt, wrong for a verdict); the app's verdict reads it instead of calling such a car "em dia". `upcoming` lists up to three things that are fine today but come next (maintenance on track, a pending IPVA or licenciamento, a policy in force), habits excluded. Alerts and upcoming are ordered by `Due.Urgency` — how far each item is through its own interval — not by days first and kilometres second. Expired warranties and renewed policies (`obligation.SeguroRenewed`, also `renewed` on the seguro responses) are not alerts.
+
+**Edits do not collide with themselves, and retries do not duplicate.** `CheckOdometerConsistencyForEdit` leaves the event's own reading out of the neighbours. A plan create reactivates an inactive plan for the same item (it used to answer 409 forever) and returns the existing plan on a replay of the same id; an obligation create returns its own row on a replay. A profile answer about a part the vehicle cannot have (belt on an electric) is a 422.
 
 **`alerts.needs_baseline` counts what can be asked, not what is missing.** The two are not the same, and the gap was a bug the owner found: the screen said three items had no history, the flow that fills it opened with one question. The app writes no question of its own — the wording comes from `maintenance_items.history_question` — so an item the catalogue never gave wording to is not unasked, it is **unaskable**, and counting it promises a question that will never be shown. The count now requires all three: no baseline, `history_status = not_asked`, and a non-empty `history_question`. Migration 000013 also wrote the six questions 000010 had left NULL, so the catalogue no longer creates the gap in the first place. The ones still NULL are deliberate and listed in that migration — inspection items with no replacement interval, the custom escape hatch, and the habits.
 

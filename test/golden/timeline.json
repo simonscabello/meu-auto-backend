@@ -8,7 +8,7 @@
         "kind": "string",
         "mileage_km": "number",
         "occurred_on": "string",
-        "subtitle": "string",
+        "subtitle": "null|string",
         "title": "null|string"
       }
     ],

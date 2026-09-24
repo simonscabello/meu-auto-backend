@@ -22,6 +22,8 @@ import (
 type VehiclePort interface {
 	AuthorizeVehicleForPlanning(ctx context.Context, userID, vehicleID uuid.UUID) (vehicleType string, fuelType *string, currentMileageKm int32, err error)
 	CheckOdometerConsistency(ctx context.Context, vehicleID uuid.UUID, occurredOn time.Time, mileageKm int32) error
+	// CheckOdometerConsistencyForEdit skips the reading the fill being edited produced.
+	CheckOdometerConsistencyForEdit(ctx context.Context, vehicleID uuid.UUID, occurredOn time.Time, mileageKm int32, sourceID uuid.UUID) error
 }
 
 type Service struct {
@@ -185,7 +187,7 @@ func (s *Service) Update(ctx context.Context, userID, id uuid.UUID, req updateRe
 			mileageKm = *req.MileageKm
 		}
 		if req.Source != sourceCorrection {
-			if err := s.vehicle.CheckOdometerConsistency(ctx, existing.VehicleID, occurredOn, mileageKm); err != nil {
+			if err := s.vehicle.CheckOdometerConsistencyForEdit(ctx, existing.VehicleID, occurredOn, mileageKm, existing.ID); err != nil {
 				return db.Abastecimento{}, Consumption{}, err
 			}
 		}

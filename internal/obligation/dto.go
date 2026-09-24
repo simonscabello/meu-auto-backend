@@ -359,11 +359,16 @@ type seguroResponse struct {
 	Status        SeguroStatus `json:"status"`
 	RemainingDays int          `json:"remaining_days"`
 
+	// Renewed is true when another policy on the vehicle took over from this one. The
+	// status stays what the dates say — an old policy is vencido — and this is what lets
+	// the app call it "renovado" instead of telling the owner the car is uninsured.
+	Renewed bool `json:"renewed"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-func toSeguroResponse(s db.Seguro, today time.Time) seguroResponse {
+func toSeguroResponse(s db.Seguro, today time.Time, renewed bool) seguroResponse {
 	status, remainingDays := ComputeSeguroStatus(s.StartsOn, s.EndsOn, today)
 
 	return seguroResponse{
@@ -380,6 +385,7 @@ func toSeguroResponse(s db.Seguro, today time.Time) seguroResponse {
 		Notes:          s.Notes,
 		Status:         status,
 		RemainingDays:  remainingDays,
+		Renewed:        renewed,
 		CreatedAt:      s.CreatedAt,
 		UpdatedAt:      s.UpdatedAt,
 	}

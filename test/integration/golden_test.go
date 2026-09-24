@@ -149,12 +149,17 @@ func TestGoldenResponses(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	u.get(vehiclePath+"/maintenance-plans").expect(http.StatusOK).decode(&listedPlans)
+	u.get(vehiclePath + "/maintenance-plans").expect(http.StatusOK).decode(&listedPlans)
 	if len(listedPlans.Data) == 0 {
 		t.Fatal("maintenance_plans_list has no items to snapshot individually")
 	}
 	assertGolden(t, "maintenance_plan_get",
 		u.get("/v1/maintenance-plans/"+listedPlans.Data[0].ID).expect(http.StatusOK))
+
+	plansBySlug := map[string]string{}
+	for slug, plan := range u.plans(vehicleID, false) {
+		plansBySlug[slug] = plan.MaintenanceID
+	}
 
 	// A service two years back at a lower mileage. It is the baseline of a used car
 	// (RN-03) and, more usefully here, it starts every clock far enough in the past that
@@ -174,6 +179,14 @@ func TestGoldenResponses(t *testing.T) {
 			"cost_cents":          45_000,
 			"warranty_months":     6,
 			"warranty_km":         10_000,
+		}, {
+			// Two planned items, so the read models below carry kilometre figures: the oil
+			// change is overdue by then (an alert with due_at_km), the coolant is not yet
+			// (a dashboard "upcoming" entry with due_at_km). Without them the only km-based
+			// alert was the warranty above, and an expired warranty is no longer an alert.
+			"maintenance_item_id": plansBySlug["troca_oleo"],
+		}, {
+			"maintenance_item_id": plansBySlug["fluido_arrefecimento"],
 		}},
 	}).expect(http.StatusCreated)
 	assertGolden(t, "maintenance_record_create", record)
@@ -226,6 +239,12 @@ func TestGoldenResponses(t *testing.T) {
 		u.get("/v1/seguros/"+seguro.id()).expect(http.StatusOK))
 
 	// ---------- read models ----------
+
+	// "Nunca foi feito" on the spark plugs: counted from the car being new, overdue at
+	// 95.000 km, and an alert whose subtitle says where it counts from — so the snapshots
+	// below record subtitle as a string, not only as null.
+	u.patch("/v1/maintenance-plans/"+u.plans(vehicleID, false)["velas"].ID,
+		map[string]any{"history_status": "never"}).expect(http.StatusOK)
 
 	assertGolden(t, "alerts", u.get(vehiclePath+"/alerts").expect(http.StatusOK))
 
