@@ -135,3 +135,24 @@ func (q *Queries) UpdateUserPassword(ctx context.Context, arg UpdateUserPassword
 	}
 	return result.RowsAffected(), nil
 }
+
+const updateUserPasswordIfCurrent = `-- name: UpdateUserPasswordIfCurrent :execrows
+UPDATE users
+SET password_hash = $1, updated_at = now()
+WHERE id = $2
+  AND password_hash = $3
+`
+
+type UpdateUserPasswordIfCurrentParams struct {
+	NewPasswordHash     string
+	ID                  uuid.UUID
+	CurrentPasswordHash string
+}
+
+func (q *Queries) UpdateUserPasswordIfCurrent(ctx context.Context, arg UpdateUserPasswordIfCurrentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateUserPasswordIfCurrent, arg.NewPasswordHash, arg.ID, arg.CurrentPasswordHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}

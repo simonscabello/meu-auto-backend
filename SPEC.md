@@ -603,6 +603,7 @@ POST   /v1/auth/password-reset/request
 POST   /v1/auth/password-reset/confirm
 GET    /v1/me
 PATCH  /v1/me
+POST   /v1/me/password                         # troca senha e mantém só esta sessão
 DELETE /v1/me                                  # LGPD — apaga tudo
 ```
 
@@ -1005,7 +1006,7 @@ app já instalado recebe (D-01).
 ### D-15 — Só rotação dispara detecção de reuso
 
 `refresh_tokens.revoked_reason` diz **por que** um token foi revogado: `rotation`, `logout`,
-`reuse` ou `password_reset`. `Refresh` só toca o alarme — encerrar todas as sessões da conta
+`reuse`, `password_reset` ou `password_change`. `Refresh` só toca o alarme — encerrar todas as sessões da conta
 — quando o token reapresentado é `rotation`.
 
 O motivo é assimetria de sinal. Um token **rotacionado** reapresentado significa que o
@@ -1126,7 +1127,8 @@ Sem isso, tudo depois vira retrabalho.
 
 ### Fase 1 — Identidade
 
-Register, login, refresh, logout, reset de senha, `/v1/me`, `DELETE /v1/me`.
+Register, login, refresh, logout, reset e troca autenticada de senha, `/v1/me`,
+`DELETE /v1/me`.
 
 ### Fase 2 — Veículo e odômetro
 

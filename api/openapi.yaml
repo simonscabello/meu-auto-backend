@@ -329,6 +329,33 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
 
+  /v1/me/password:
+    post:
+      operationId: changePassword
+      tags: [conta]
+      summary: Alterar a senha
+      description: |
+        Exige a senha atual. A alteração revoga todas as sessões anteriores e devolve uma
+        sessão nova, mantendo conectado somente o aparelho que realizou a troca. Tokens de
+        acesso antigos podem permanecer válidos até o fim do TTL curto de 15 minutos.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChangePasswordRequest" }
+      responses:
+        "200":
+          description: Senha alterada e sessão atual substituída
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401":
+          description: Senha atual incorreta ou sessão inválida
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
   # ---------------------------------------------------------------- veículos
   /v1/vehicles:
     get:
@@ -500,11 +527,14 @@ paths:
       summary: Apagar uma leitura de quilometragem
       description: |
         Exclusão definitiva, ao contrário do veículo: uma leitura digitada errado é ruído,
-        não histórico, e deixá-la corromperia todo intervalo derivado dela.
+        não histórico, e deixá-la corromperia todo intervalo derivado dela. Somente leituras
+        `manual` e `correction` podem ser apagadas diretamente; leituras geradas por uma
+        manutenção ou abastecimento devem ser alteradas pelo registro de origem.
       responses:
         "204": { description: Leitura apagada }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   # ---------------------------------------------------------------- manutenção
   /v1/vehicle-brands:
@@ -1671,6 +1701,13 @@ components:
       required: [name]
       properties:
         name: { type: string, maxLength: 120 }
+
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password: { type: string }
+        new_password: { type: string, minLength: 8, maxLength: 128 }
 
     DeleteMeRequest:
       type: object

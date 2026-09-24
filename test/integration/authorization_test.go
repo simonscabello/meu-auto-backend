@@ -96,6 +96,14 @@ func protectedRoutes() []protectedRoute {
 		{http.MethodPatch, "/v1/me",
 			func(*ownedResources) string { return "/v1/me" },
 			func(*ownedResources) any { return map[string]any{"name": "Nome Novo"} }, callerScoped},
+		{http.MethodPost, "/v1/me/password",
+			func(*ownedResources) string { return "/v1/me/password" },
+			func(*ownedResources) any {
+				return map[string]any{
+					"current_password": "senha-atual",
+					"new_password":     "senha-nova-123",
+				}
+			}, callerScoped},
 		{http.MethodDelete, "/v1/me",
 			func(*ownedResources) string { return "/v1/me" },
 			func(*ownedResources) any { return map[string]any{"password": "irrelevante-aqui"} },
@@ -365,10 +373,10 @@ func TestUnknownResourceIdsAreNotFound(t *testing.T) {
 	u.createVehicle()
 
 	missing := &ownedResources{
-		vehicleID:    uuid.NewString(),
-		readingID:    uuid.NewString(),
-		planID:       uuid.NewString(),
-		recordID:     uuid.NewString(),
+		vehicleID:       uuid.NewString(),
+		readingID:       uuid.NewString(),
+		planID:          uuid.NewString(),
+		recordID:        uuid.NewString(),
 		obligationID:    uuid.NewString(),
 		seguroID:        uuid.NewString(),
 		itemID:          u.firstItemID(),

@@ -38,6 +38,7 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Use(auth.Middleware(h.tokens))
 		r.Get("/me", h.me)
 		r.Patch("/me", h.updateMe)
+		r.Post("/me/password", h.changePassword)
 		r.Delete("/me", h.deleteMe)
 	})
 }
@@ -178,6 +179,27 @@ func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, toUserResponse(user))
+}
+
+func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
+	userID, err := callerID(r)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+
+	req, err := httpx.DecodeBody[changePasswordRequest](r)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+
+	session, err := h.service.ChangePassword(r.Context(), userID, req, r.UserAgent())
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, toSessionResponse(session))
 }
 
 func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {

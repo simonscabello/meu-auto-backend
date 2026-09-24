@@ -8,10 +8,11 @@
 -- Brazilian mobile network is an ordinary event: the owner signs out on one phone and is
 -- signed out of the tablet too.
 --
--- Only 'rotation' is evidence of anything. The other three are deliberate invalidations,
+-- Only 'rotation' is evidence of anything. The other reasons are deliberate invalidations,
 -- and replaying one proves only that a dead token is dead.
 --
--- The list is duplicated in internal/identity (revokeReason*). Change both together.
+-- The list is extended by later migrations and duplicated in internal/identity
+-- (revokeReason*). Change both together.
 
 ALTER TABLE refresh_tokens ADD COLUMN revoked_reason text;
 

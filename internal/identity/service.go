@@ -386,6 +386,65 @@ func (s *Service) UpdateName(ctx context.Context, userID uuid.UUID, req updateMe
 	return user, nil
 }
 
+// ChangePassword verifies the current credential, replaces it and keeps only this device
+// signed in. Old access tokens naturally expire within their short TTL; every old refresh
+// token is revoked immediately.
+func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID,
+	req changePasswordRequest, userAgent string) (Session, error) {
+	if err := req.validate(); err != nil {
+		return Session{}, err
+	}
+
+	user, err := s.repo.UserByID(ctx, userID)
+	switch {
+	case errors.Is(err, ErrUserNotFound):
+		return Session{}, apperr.Unauthorized("Sessão inválida. Entre novamente.")
+	case err != nil:
+		return Session{}, apperr.Internal(err)
+	}
+
+	matches, err := auth.VerifyPassword(user.PasswordHash, req.CurrentPassword)
+	if err != nil {
+		return Session{}, apperr.Internal(err)
+	}
+	if !matches {
+		return Session{}, apperr.Unauthorized("Senha atual incorreta.")
+	}
+
+	passwordHash, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		return Session{}, apperr.Internal(err)
+	}
+
+	now := s.now()
+	accessToken, accessExpiresAt, err := s.tokens.IssueAccessToken(user.ID, now)
+	if err != nil {
+		return Session{}, apperr.Internal(err)
+	}
+	refreshToken, refreshHash, err := auth.NewOpaqueToken()
+	if err != nil {
+		return Session{}, apperr.Internal(err)
+	}
+	refreshExpiresAt := now.Add(auth.RefreshTokenTTL)
+
+	_, err = s.repo.ChangePassword(ctx, user.ID, user.PasswordHash, passwordHash,
+		refreshHash, refreshExpiresAt, optional(userAgent))
+	switch {
+	case errors.Is(err, ErrPasswordStale):
+		return Session{}, apperr.Unauthorized("A senha foi alterada em outra sessão. Entre novamente.")
+	case err != nil:
+		return Session{}, apperr.Internal(err)
+	}
+
+	return Session{
+		User:             user,
+		AccessToken:      accessToken,
+		AccessExpiresAt:  accessExpiresAt,
+		RefreshToken:     refreshToken,
+		RefreshExpiresAt: refreshExpiresAt,
+	}, nil
+}
+
 // DeleteAccount erases the account and everything that cascades from it.
 //
 // The current password is required. This is irreversible and takes every vehicle and

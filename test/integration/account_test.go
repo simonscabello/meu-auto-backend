@@ -113,6 +113,58 @@ func (e *env) loginAgain(u *user) string {
 	return session.RefreshToken
 }
 
+// TestAuthenticatedPasswordChangeKeepsOnlyTheCallingDevice verifies the product promise:
+// changing a password is not a recovery flow, so the current device receives a replacement
+// session while every session that knew the old credential loses refresh access.
+func TestAuthenticatedPasswordChangeKeepsOnlyTheCallingDevice(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+
+	u := e.newUser()
+	secondDevice := e.loginAgain(u)
+	const newPassword = "minha-nova-senha-123"
+
+	u.post("/v1/me/password", map[string]any{
+		"current_password": "senha-incorreta",
+		"new_password":     newPassword,
+	}).expectError(http.StatusUnauthorized, "unauthorized")
+
+	u.post("/v1/me/password", map[string]any{
+		"current_password": u.Password,
+		"new_password":     u.Password,
+	}).expectError(http.StatusUnprocessableEntity, "validation_failed")
+
+	var changed struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	u.post("/v1/me/password", map[string]any{
+		"current_password": u.Password,
+		"new_password":     newPassword,
+	}).expect(http.StatusOK).decode(&changed)
+
+	if changed.AccessToken == "" || changed.RefreshToken == "" {
+		t.Fatal("password change did not return the replacement session")
+	}
+	e.anonymous().withToken(changed.AccessToken).get("/v1/me").expect(http.StatusOK)
+
+	for _, token := range []string{u.RefreshToken, secondDevice} {
+		e.anonymous().post("/v1/auth/refresh", map[string]any{"refresh_token": token}).
+			expectError(http.StatusUnauthorized, "unauthorized")
+	}
+
+	e.anonymous().post("/v1/auth/refresh", map[string]any{
+		"refresh_token": changed.RefreshToken,
+	}).expect(http.StatusOK)
+
+	e.anonymous().post("/v1/auth/login", map[string]any{
+		"email": u.Email, "password": u.Password,
+	}).expectError(http.StatusUnauthorized, "unauthorized")
+	e.anonymous().post("/v1/auth/login", map[string]any{
+		"email": u.Email, "password": newPassword,
+	}).expect(http.StatusOK)
+}
+
 // TestPasswordResetRunsEndToEnd follows the whole flow, including the part that never
 // appears in a response: the token only exists inside the e-mail.
 func TestPasswordResetRunsEndToEnd(t *testing.T) {

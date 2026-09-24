@@ -118,6 +118,25 @@ func (r updateMeRequest) validate() error {
 	return errs.Err("Não foi possível atualizar a conta.")
 }
 
+// changePasswordRequest proves possession of the current credential before replacing it.
+// The endpoint also requires a valid access token; neither factor alone is enough.
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+func (r changePasswordRequest) validate() error {
+	errs := validate.New()
+	if r.CurrentPassword == "" {
+		errs.Add("current_password", "Informe sua senha atual.")
+	}
+	validatePassword(errs, "new_password", r.NewPassword)
+	if r.CurrentPassword != "" && r.CurrentPassword == r.NewPassword {
+		errs.Add("new_password", "A nova senha deve ser diferente da atual.")
+	}
+	return errs.Err("Não foi possível alterar a senha.")
+}
+
 // deleteMeRequest requires the current password.
 //
 // Account deletion is irreversible and cascades to every vehicle and record. A stolen

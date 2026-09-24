@@ -530,6 +530,19 @@ func (s *Service) DeleteReading(ctx context.Context, userID, readingID uuid.UUID
 		return errReadingNotFound()
 	}
 
+	if reading.SourceMaintenanceID != nil {
+		return apperr.Conflict(
+			"Esta quilometragem pertence a uma manutenção. Edite ou exclua a manutenção para alterá-la.")
+	}
+	if reading.SourceAbastecimentoID != nil {
+		return apperr.Conflict(
+			"Esta quilometragem pertence a um abastecimento. Edite ou exclua o abastecimento para alterá-la.")
+	}
+	if reading.Source != "manual" && reading.Source != "correction" {
+		return apperr.Conflict(
+			"Esta quilometragem foi criada por outro registro e não pode ser excluída diretamente.")
+	}
+
 	err = s.repo.DeleteReading(ctx, readingID)
 	switch {
 	case errors.Is(err, ErrReadingNotFound):

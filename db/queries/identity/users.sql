@@ -20,5 +20,11 @@ UPDATE users
 SET password_hash = $2, updated_at = now()
 WHERE id = $1;
 
+-- name: UpdateUserPasswordIfCurrent :execrows
+UPDATE users
+SET password_hash = sqlc.arg('new_password_hash'), updated_at = now()
+WHERE id = sqlc.arg('id')
+  AND password_hash = sqlc.arg('current_password_hash');
+
 -- name: DeleteUser :execrows
 DELETE FROM users WHERE id = $1;

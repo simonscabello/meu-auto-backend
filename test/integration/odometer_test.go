@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // The odometer is where MVP-2 lands. Abastecimento writes into odometer_readings and into
@@ -56,6 +58,35 @@ func TestOdometerCacheIsMaintainedByTheTrigger(t *testing.T) {
 	// The reading deleted above is gone for good; the earlier one is untouched.
 	u.delete("/v1/odometer/"+newest, nil).expectError(http.StatusNotFound, "not_found")
 	u.delete("/v1/odometer/"+latest, nil).expect(http.StatusNoContent)
+}
+
+func TestGeneratedOdometerReadingsCannotBeDeletedDirectly(t *testing.T) {
+	t.Parallel()
+	e := newEnv(t)
+
+	u := e.newUser()
+	vehicleID := u.createVehicle()
+	recordID := u.createRecord(vehicleID, 52_000, "")
+
+	var maintenanceReadingID uuid.UUID
+	if err := e.db.Pool.QueryRow(context.Background(), `
+		SELECT id FROM odometer_readings WHERE source_maintenance_id = $1`,
+		uuid.MustParse(recordID)).Scan(&maintenanceReadingID); err != nil {
+		t.Fatalf("find maintenance odometer reading: %v", err)
+	}
+	u.delete("/v1/odometer/"+maintenanceReadingID.String(), nil).
+		expectError(http.StatusConflict, "conflict")
+
+	abastecimentoID := u.createAbastecimento(vehicleID, 53_000)
+	_, abastecimentoReadingID := e.odometerForAbastecimento(t, abastecimentoID)
+	u.delete("/v1/odometer/"+abastecimentoReadingID.String(), nil).
+		expectError(http.StatusConflict, "conflict")
+
+	for _, id := range []uuid.UUID{maintenanceReadingID, abastecimentoReadingID} {
+		if n := e.countRows(t, `SELECT count(*) FROM odometer_readings WHERE id = $1`, id); n != 1 {
+			t.Errorf("protected odometer reading %s was deleted", id)
+		}
+	}
 }
 
 // TestOdometerRollbackIsRefusedAndCorrectable is RN-01.

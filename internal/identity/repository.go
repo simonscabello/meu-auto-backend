@@ -23,6 +23,7 @@ var (
 	ErrUserNotFound  = errors.New("identity: user not found")
 	ErrEmailTaken    = errors.New("identity: e-mail already registered")
 	ErrTokenNotFound = errors.New("identity: token not found")
+	ErrPasswordStale = errors.New("identity: current password is stale")
 )
 
 const pgUniqueViolation = "23505"
@@ -153,13 +154,14 @@ func (r *Repository) RefreshTokenByHash(ctx context.Context, hash []byte) (db.Re
 //
 // Only revokeReasonRotation is evidence of anything. A rotated-out token presented again
 // means the legitimate client holds the successor and somebody else holds this one; the
-// other three are deliberate invalidations, and replaying one proves only that a dead token
+// other reasons are deliberate invalidations, and replaying one proves only that a dead token
 // is dead. Service.Refresh is where that distinction is spent.
 const (
-	revokeReasonRotation      = "rotation"
-	revokeReasonLogout        = "logout"
-	revokeReasonReuse         = "reuse"
-	revokeReasonPasswordReset = "password_reset"
+	revokeReasonRotation       = "rotation"
+	revokeReasonLogout         = "logout"
+	revokeReasonReuse          = "reuse"
+	revokeReasonPasswordReset  = "password_reset"
+	revokeReasonPasswordChange = "password_change"
 )
 
 // RevokeRefreshTokenOnLogout revokes a single token because its owner signed out.
@@ -171,7 +173,7 @@ func (r *Repository) RevokeRefreshTokenOnLogout(ctx context.Context, id uuid.UUI
 }
 
 // RevokeAllUserRefreshTokens ends every session for a user. Used on reuse detection and
-// after a password reset; reason records which.
+// after a password reset or authenticated change; reason records which.
 func (r *Repository) RevokeAllUserRefreshTokens(ctx context.Context, userID uuid.UUID, reason string) error {
 	if _, err := r.queries.RevokeAllUserRefreshTokens(ctx, db.RevokeAllUserRefreshTokensParams{
 		UserID: userID,
@@ -288,4 +290,48 @@ func (r *Repository) CompletePasswordReset(ctx context.Context, tokenID, userID 
 		}
 		return nil
 	})
+}
+
+// ChangePassword replaces the credential, revokes every old refresh session and creates
+// the caller's replacement refresh token in one transaction.
+//
+// The current hash participates in the UPDATE so two concurrent changes cannot both win
+// after verifying the same old password in the service.
+func (r *Repository) ChangePassword(ctx context.Context, userID uuid.UUID,
+	currentPasswordHash, newPasswordHash string, refreshHash []byte,
+	refreshExpiresAt time.Time, userAgent *string) (db.RefreshToken, error) {
+	var created db.RefreshToken
+	err := r.inTx(ctx, func(q *db.Queries) error {
+		rows, err := q.UpdateUserPasswordIfCurrent(ctx, db.UpdateUserPasswordIfCurrentParams{
+			ID:                  userID,
+			NewPasswordHash:     newPasswordHash,
+			CurrentPasswordHash: currentPasswordHash,
+		})
+		if err != nil {
+			return fmt.Errorf("change password: %w", err)
+		}
+		if rows == 0 {
+			return ErrPasswordStale
+		}
+
+		if _, err := q.RevokeAllUserRefreshTokens(ctx, db.RevokeAllUserRefreshTokensParams{
+			UserID: userID,
+			Reason: revokeReasonPasswordChange,
+		}); err != nil {
+			return fmt.Errorf("revoke sessions after password change: %w", err)
+		}
+
+		created, err = q.CreateRefreshToken(ctx, db.CreateRefreshTokenParams{
+			ID:        uuid.New(),
+			UserID:    userID,
+			TokenHash: refreshHash,
+			ExpiresAt: refreshExpiresAt,
+			UserAgent: userAgent,
+		})
+		if err != nil {
+			return fmt.Errorf("create session after password change: %w", err)
+		}
+		return nil
+	})
+	return created, err
 }
