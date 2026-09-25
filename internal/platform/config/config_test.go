@@ -110,6 +110,7 @@ func TestProductionDefaultsToNoCORSOrigin(t *testing.T) {
 	t.Setenv("CORS_ORIGINS", "")
 	t.Setenv("RESEND_API_KEY", "re_test")
 	t.Setenv("MAIL_FROM", "Meu Auto <nao-responda@meuauto.com.br>")
+	setBucketEnv(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -150,5 +151,44 @@ func TestProductionRequiresMailProvider(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error is missing %s:\n%v", want, err)
 		}
+	}
+}
+
+func setBucketEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("BUCKET_ENDPOINT", "https://t3.storageapi.dev")
+	t.Setenv("BUCKET_NAME", "meu-auto-fotos-abc123")
+	t.Setenv("BUCKET_ACCESS_KEY_ID", "tid_test")
+	t.Setenv("BUCKET_SECRET_ACCESS_KEY", "tsec_test")
+}
+
+// Production must refuse to start without a bucket: photos kept in memory would vanish on
+// the next deploy while the rows still named them.
+func TestProductionRequiresBucket(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("APP_ENV", EnvProduction)
+	t.Setenv("CORS_ORIGINS", "")
+	t.Setenv("RESEND_API_KEY", "re_test")
+	t.Setenv("MAIL_FROM", "Meu Auto <nao-responda@meuauto.com.br>")
+	t.Setenv("BUCKET_ENDPOINT", "")
+
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "BUCKET_ENDPOINT") {
+		t.Fatalf("Load() = %v, want an error naming the bucket variables", err)
+	}
+}
+
+// Development runs without a bucket; photos then live in memory.
+func TestDevelopmentRunsWithoutBucket(t *testing.T) {
+	setValidEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.HasBucket() {
+		t.Error("HasBucket() = true with no bucket variables set")
+	}
+	if cfg.BucketRegion != "auto" {
+		t.Errorf("BucketRegion = %q, want auto", cfg.BucketRegion)
 	}
 }

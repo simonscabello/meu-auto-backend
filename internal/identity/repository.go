@@ -98,15 +98,58 @@ func (r *Repository) UserByEmail(ctx context.Context, email string) (db.User, er
 	return user, nil
 }
 
-func (r *Repository) UpdateUserName(ctx context.Context, id uuid.UUID, name string) (db.User, error) {
-	user, err := r.queries.UpdateUserName(ctx, db.UpdateUserNameParams{ID: id, Name: name})
+// UpdateUserProfile applies a validated PATCH: nil leaves a column alone, and a column
+// named in clear goes back to NULL.
+func (r *Repository) UpdateUserProfile(ctx context.Context, id uuid.UUID, p profileUpdate) (db.User, error) {
+	clear := p.Clear
+	if clear == nil {
+		clear = []string{}
+	}
+	user, err := r.queries.UpdateUserProfile(ctx, db.UpdateUserProfileParams{
+		ID:           id,
+		Name:         p.Name,
+		BirthDate:    p.BirthDate,
+		Phone:        p.Phone,
+		CnhCategory:  p.CnhCategory,
+		CnhExpiresOn: p.CnhExpiresOn,
+		Clear:        clear,
+	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return db.User{}, ErrUserNotFound
 		}
-		return db.User{}, fmt.Errorf("update user name: %w", err)
+		return db.User{}, fmt.Errorf("update user profile: %w", err)
 	}
 	return user, nil
+}
+
+// SetUserPhoto records key as the user's photo (nil removes it) and returns the key it
+// replaced, read under a row lock so two uploads at once cannot both believe they
+// replaced the same photo and leave the other's object behind.
+func (r *Repository) SetUserPhoto(ctx context.Context, id uuid.UUID, key *string) (db.User, *string, error) {
+	var (
+		user     db.User
+		previous *string
+	)
+	err := r.inTx(ctx, func(q *db.Queries) error {
+		old, err := q.LockUserPhotoKey(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrUserNotFound
+			}
+			return fmt.Errorf("lock user photo: %w", err)
+		}
+		previous = old
+		user, err = q.SetUserPhotoKey(ctx, db.SetUserPhotoKeyParams{ID: id, PhotoKey: key})
+		if err != nil {
+			return fmt.Errorf("set user photo: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return db.User{}, nil, err
+	}
+	return user, previous, nil
 }
 
 // DeleteUser removes the account. Every dependent row is removed with it by ON DELETE

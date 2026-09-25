@@ -96,6 +96,11 @@ func protectedRoutes() []protectedRoute {
 		{http.MethodPatch, "/v1/me",
 			func(*ownedResources) string { return "/v1/me" },
 			func(*ownedResources) any { return map[string]any{"name": "Nome Novo"} }, callerScoped},
+		// The photo is the caller's own; there is no other user's photo to address.
+		{http.MethodPut, "/v1/me/photo",
+			func(*ownedResources) string { return "/v1/me/photo" }, nil, callerScoped},
+		{http.MethodDelete, "/v1/me/photo",
+			func(*ownedResources) string { return "/v1/me/photo" }, nil, callerScoped},
 		{http.MethodPost, "/v1/me/password",
 			func(*ownedResources) string { return "/v1/me/password" },
 			func(*ownedResources) any {

@@ -1,9 +1,14 @@
 {
   "body": {
+    "birth_date": "null",
+    "cnh_category": "null",
+    "cnh_expires_on": "null",
     "created_at": "string",
     "email": "string",
     "id": "string",
-    "name": "string"
+    "name": "string",
+    "phone": "null",
+    "photo_url": "null"
   },
   "status": 200
 }

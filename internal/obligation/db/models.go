@@ -148,6 +148,11 @@ type User struct {
 	Name         string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+	BirthDate    *time.Time
+	Phone        *string
+	CnhCategory  *string
+	CnhExpiresOn *time.Time
+	PhotoKey     *string
 }
 
 type Vehicle struct {

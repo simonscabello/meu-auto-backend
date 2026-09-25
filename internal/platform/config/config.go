@@ -56,6 +56,22 @@ type Config struct {
 	// is never rendered into a URL, never logged, and never appears in any response.
 	FipeAPIURL   string
 	FipeAPIToken string
+
+	// The S3-compatible bucket profile photos live in (a Railway Bucket in production).
+	// Required in production; in development, leaving all of them empty keeps photos in
+	// memory, which is enough to exercise the flow and loses them on restart.
+	BucketEndpoint        string
+	BucketName            string
+	BucketAccessKeyID     string
+	BucketSecretAccessKey string
+	BucketRegion          string
+	BucketPathStyle       bool
+}
+
+// HasBucket reports whether object storage is configured.
+func (c Config) HasBucket() bool {
+	return c.BucketEndpoint != "" && c.BucketName != "" &&
+		c.BucketAccessKeyID != "" && c.BucketSecretAccessKey != ""
 }
 
 // TimeZone is the zone every civil-date decision is made in. The product is
@@ -95,6 +111,13 @@ func Load() (Config, error) {
 		// its default" — see fipe.New.
 		FipeAPIURL:   strings.TrimSpace(os.Getenv("FIPE_API_URL")),
 		FipeAPIToken: strings.TrimSpace(os.Getenv("FIPE_API_TOKEN")),
+
+		BucketEndpoint:        strings.TrimSpace(os.Getenv("BUCKET_ENDPOINT")),
+		BucketName:            strings.TrimSpace(os.Getenv("BUCKET_NAME")),
+		BucketAccessKeyID:     strings.TrimSpace(os.Getenv("BUCKET_ACCESS_KEY_ID")),
+		BucketSecretAccessKey: strings.TrimSpace(os.Getenv("BUCKET_SECRET_ACCESS_KEY")),
+		BucketRegion:          strings.TrimSpace(envOr("BUCKET_REGION", "auto")),
+		BucketPathStyle:       strings.EqualFold(envOr("BUCKET_PATH_STYLE", "false"), "true"),
 	}
 
 	switch cfg.AppEnv {
@@ -143,6 +166,12 @@ func Load() (Config, error) {
 		}
 		if cfg.MailFrom == "" {
 			problems = append(problems, "MAIL_FROM is required in production")
+		}
+		// Photos kept in memory would vanish on every deploy while the rows still named
+		// them. Refuse to start rather than lose uploads quietly.
+		if !cfg.HasBucket() {
+			problems = append(problems, "BUCKET_ENDPOINT, BUCKET_NAME, BUCKET_ACCESS_KEY_ID "+
+				"and BUCKET_SECRET_ACCESS_KEY are required in production (profile photos)")
 		}
 	}
 

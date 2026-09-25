@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/simonscabello/meu-auto-backend/internal/app"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/config"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/storage"
 	"github.com/simonscabello/meu-auto-backend/test/testdb"
 )
 
@@ -75,6 +77,9 @@ type env struct {
 	handler http.Handler
 	mailer  *captureMailer
 
+	// photos is the in-memory bucket, read back by the photo tests.
+	photos *storage.Memory
+
 	// location is what the API resolves "today" against. Tests that care about a due date
 	// compute the expected value from env.today() rather than from time.Now, so a run at
 	// 23:50 in São Paulo does not disagree with the server about which day it is.
@@ -96,6 +101,7 @@ func newEnv(t *testing.T, opts ...envOption) *env {
 	}
 
 	mail := &captureMailer{}
+	photos := storage.NewMemory()
 
 	cfg := config.Config{
 		AppEnv:           config.EnvDevelopment,
@@ -120,8 +126,10 @@ func newEnv(t *testing.T, opts ...envOption) *env {
 			Mailer:   mail,
 			Location: location,
 			Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+			Photos:   photos,
 		}),
 		mailer:   mail,
+		photos:   photos,
 		location: location,
 	}
 }
@@ -211,6 +219,25 @@ func (c *client) post(path string, b any) *response   { return c.do(http.MethodP
 func (c *client) patch(path string, b any) *response  { return c.do(http.MethodPatch, path, b) }
 func (c *client) delete(path string, b any) *response { return c.do(http.MethodDelete, path, b) }
 
+// putPhoto sends data as the "photo" part of a multipart body, the way the app uploads.
+func (c *client) putPhoto(data []byte) *response {
+	c.t.Helper()
+
+	var buf bytes.Buffer
+	form := multipart.NewWriter(&buf)
+	part, err := form.CreateFormFile("photo", "foto.jpg")
+	if err != nil {
+		c.t.Fatalf("create multipart part: %v", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		c.t.Fatalf("write multipart part: %v", err)
+	}
+	if err := form.Close(); err != nil {
+		c.t.Fatalf("close multipart body: %v", err)
+	}
+	return c.send(http.MethodPut, "/v1/me/photo", &buf, form.FormDataContentType())
+}
+
 func (c *client) do(method, path string, body any) *response {
 	c.t.Helper()
 
@@ -223,8 +250,14 @@ func (c *client) do(method, path string, body any) *response {
 		reader = bytes.NewReader(encoded)
 	}
 
+	return c.send(method, path, reader, "application/json")
+}
+
+func (c *client) send(method, path string, reader io.Reader, contentType string) *response {
+	c.t.Helper()
+
 	req := httptest.NewRequest(method, path, reader)
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}

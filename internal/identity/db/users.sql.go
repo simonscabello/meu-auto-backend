@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -14,7 +15,7 @@ import (
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (id, email, password_hash, name)
 VALUES ($1, $2, $3, $4)
-RETURNING id, email, password_hash, name, created_at, updated_at
+RETURNING id, email, password_hash, name, created_at, updated_at, birth_date, phone, cnh_category, cnh_expires_on, photo_key
 `
 
 type CreateUserParams struct {
@@ -39,6 +40,11 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BirthDate,
+		&i.Phone,
+		&i.CnhCategory,
+		&i.CnhExpiresOn,
+		&i.PhotoKey,
 	)
 	return i, err
 }
@@ -56,7 +62,7 @@ func (q *Queries) DeleteUser(ctx context.Context, id uuid.UUID) (int64, error) {
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, name, created_at, updated_at FROM users WHERE email = $1
+SELECT id, email, password_hash, name, created_at, updated_at, birth_date, phone, cnh_category, cnh_expires_on, photo_key FROM users WHERE email = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -69,12 +75,17 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BirthDate,
+		&i.Phone,
+		&i.CnhCategory,
+		&i.CnhExpiresOn,
+		&i.PhotoKey,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, password_hash, name, created_at, updated_at FROM users WHERE id = $1
+SELECT id, email, password_hash, name, created_at, updated_at, birth_date, phone, cnh_category, cnh_expires_on, photo_key FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
@@ -87,24 +98,43 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BirthDate,
+		&i.Phone,
+		&i.CnhCategory,
+		&i.CnhExpiresOn,
+		&i.PhotoKey,
 	)
 	return i, err
 }
 
-const updateUserName = `-- name: UpdateUserName :one
-UPDATE users
-SET name = $2, updated_at = now()
-WHERE id = $1
-RETURNING id, email, password_hash, name, created_at, updated_at
+const lockUserPhotoKey = `-- name: LockUserPhotoKey :one
+SELECT photo_key FROM users WHERE id = $1 FOR UPDATE
 `
 
-type UpdateUserNameParams struct {
-	ID   uuid.UUID
-	Name string
+// Reads the photo a user has now, locking the row so a concurrent upload waits and then
+// sees this one's key. Called inside the transaction that sets the new one.
+func (q *Queries) LockUserPhotoKey(ctx context.Context, id uuid.UUID) (*string, error) {
+	row := q.db.QueryRow(ctx, lockUserPhotoKey, id)
+	var photo_key *string
+	err := row.Scan(&photo_key)
+	return photo_key, err
 }
 
-func (q *Queries) UpdateUserName(ctx context.Context, arg UpdateUserNameParams) (User, error) {
-	row := q.db.QueryRow(ctx, updateUserName, arg.ID, arg.Name)
+const setUserPhotoKey = `-- name: SetUserPhotoKey :one
+UPDATE users
+SET photo_key  = $1,
+    updated_at = now()
+WHERE id = $2
+RETURNING id, email, password_hash, name, created_at, updated_at, birth_date, phone, cnh_category, cnh_expires_on, photo_key
+`
+
+type SetUserPhotoKeyParams struct {
+	PhotoKey *string
+	ID       uuid.UUID
+}
+
+func (q *Queries) SetUserPhotoKey(ctx context.Context, arg SetUserPhotoKeyParams) (User, error) {
+	row := q.db.QueryRow(ctx, setUserPhotoKey, arg.PhotoKey, arg.ID)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -113,6 +143,11 @@ func (q *Queries) UpdateUserName(ctx context.Context, arg UpdateUserNameParams) 
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BirthDate,
+		&i.Phone,
+		&i.CnhCategory,
+		&i.CnhExpiresOn,
+		&i.PhotoKey,
 	)
 	return i, err
 }
@@ -155,4 +190,59 @@ func (q *Queries) UpdateUserPasswordIfCurrent(ctx context.Context, arg UpdateUse
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const updateUserProfile = `-- name: UpdateUserProfile :one
+UPDATE users
+SET name           = COALESCE($1, name),
+    birth_date     = CASE WHEN 'birth_date' = ANY($2::text[]) THEN NULL
+                          ELSE COALESCE($3, birth_date) END,
+    phone          = CASE WHEN 'phone' = ANY($2::text[]) THEN NULL
+                          ELSE COALESCE($4, phone) END,
+    cnh_category   = CASE WHEN 'cnh_category' = ANY($2::text[]) THEN NULL
+                          ELSE COALESCE($5, cnh_category) END,
+    cnh_expires_on = CASE WHEN 'cnh_expires_on' = ANY($2::text[]) THEN NULL
+                          ELSE COALESCE($6, cnh_expires_on) END,
+    updated_at     = now()
+WHERE id = $7
+RETURNING id, email, password_hash, name, created_at, updated_at, birth_date, phone, cnh_category, cnh_expires_on, photo_key
+`
+
+type UpdateUserProfileParams struct {
+	Name         *string
+	Clear        []string
+	BirthDate    *time.Time
+	Phone        *string
+	CnhCategory  *string
+	CnhExpiresOn *time.Time
+	ID           uuid.UUID
+}
+
+// PATCH semantics: a NULL argument leaves the column untouched, and a column named in
+// `clear` is set back to NULL. name is NOT NULL and is never in `clear`.
+func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserProfile,
+		arg.Name,
+		arg.Clear,
+		arg.BirthDate,
+		arg.Phone,
+		arg.CnhCategory,
+		arg.CnhExpiresOn,
+		arg.ID,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.BirthDate,
+		&i.Phone,
+		&i.CnhCategory,
+		&i.CnhExpiresOn,
+		&i.PhotoKey,
+	)
+	return i, err
 }

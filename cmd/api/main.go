@@ -31,6 +31,7 @@ import (
 	"github.com/simonscabello/meu-auto-backend/internal/platform/database"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/logging"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/mailer"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/storage"
 )
 
 const (
@@ -88,6 +89,34 @@ func run() error {
 		mail = mailer.LogMailer{Log: log}
 	}
 
+	var photos storage.Store
+	if cfg.HasBucket() {
+		bucket := storage.NewS3(storage.S3Config{
+			Endpoint:        cfg.BucketEndpoint,
+			Bucket:          cfg.BucketName,
+			AccessKeyID:     cfg.BucketAccessKeyID,
+			SecretAccessKey: cfg.BucketSecretAccessKey,
+			Region:          cfg.BucketRegion,
+			PathStyle:       cfg.BucketPathStyle,
+		})
+		// In the background and only logged: the answer is for whoever reads the deploy
+		// log, and a slow bucket must not delay the API coming up.
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := bucket.Ping(ctx); err != nil {
+				log.Error("photo bucket unreachable: uploads will fail", slog.Any("error", err))
+				return
+			}
+			log.Info("photo bucket reachable")
+		}()
+		photos = bucket
+	} else {
+		// config.Load only allows this in development.
+		log.Warn("BUCKET_* is not set: profile photos are kept in memory and lost on restart")
+		photos = storage.NewMemory()
+	}
+
 	server := &http.Server{
 		Addr: net.JoinHostPort("", cfg.Port),
 		Handler: app.New(cfg, app.Deps{
@@ -95,6 +124,7 @@ func run() error {
 			Mailer:   mail,
 			Location: location,
 			Log:      log,
+			Photos:   photos,
 		}),
 
 		// Without these a single slow or malicious client can hold a connection open

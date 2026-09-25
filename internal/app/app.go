@@ -25,6 +25,7 @@ import (
 	"github.com/simonscabello/meu-auto-backend/internal/platform/auth"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/config"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/mailer"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/storage"
 	"github.com/simonscabello/meu-auto-backend/internal/vehicle"
 )
 
@@ -38,6 +39,10 @@ type Deps struct {
 	Mailer   mailer.Mailer
 	Location *time.Location
 	Log      *slog.Logger
+
+	// Photos is where profile pictures live: the bucket in production, memory in
+	// development without one and in the integration suite.
+	Photos storage.Store
 }
 
 // New wires every module and returns the HTTP handler.
@@ -96,7 +101,7 @@ func New(cfg config.Config, deps Deps) http.Handler {
 
 	identityHandler := identity.NewHandler(
 		identity.NewService(identity.NewRepository(deps.Pool), tokens, deps.Mailer, deps.Log,
-			cfg.PasswordResetURL, vehicleService),
+			deps.Photos, deps.Location, cfg.PasswordResetURL, vehicleService),
 		tokens,
 		cfg.TrustProxy,
 	)

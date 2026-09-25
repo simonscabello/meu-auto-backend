@@ -51,7 +51,7 @@ These come from `PRODUCT.md` and shape the schema directly:
 
 - **Multiple vehicles per account**, with an account owning many.
 - **Accounts and cloud sync** — the server is the source of truth, and the same account works across devices.
-- **Receipt and document images** (receipts, CRLV, insurance policies) are stored and served. Storage strategy is undecided.
+- **Receipt and document images** (receipts, CRLV, insurance policies) are stored and served. The storage is decided (SPEC.md D-17): a private S3-compatible bucket behind `internal/platform/storage`, served through signed URLs. Only the profile photo uses it so far.
 - **The service history is a defensible record.** Dates, amounts and attachments are load-bearing for resale value and for disputes with a shop — favour append-with-audit over silent mutation, and think hard before allowing hard deletes.
 - **Offline operation is explicitly out of scope**, so no sync-conflict resolution is required today. The product record flags this as a real risk worth revisiting, since owners log things in parking garages and on roadsides. If it is ever reversed, it changes the API shape substantially — do not architect it away, but do not build for it unasked either.
 
@@ -143,7 +143,7 @@ gofmt -l .                           # see the CRLF note below before believing 
 
 **MVP-1 complete.** Seven domain modules:
 
-- **identity** — `POST /v1/auth/{register,login,refresh,logout}`, `POST /v1/auth/password-reset/{request,confirm}`, `GET|PATCH|DELETE /v1/me`. argon2id passwords, HS256 access tokens with the algorithm pinned, opaque rotating refresh tokens with reuse detection scoped to rotation alone (SPEC.md D-15), rate limiting by e-mail and by IP.
+- **identity** — `POST /v1/auth/{register,login,refresh,logout}`, `POST /v1/auth/password-reset/{request,confirm}`, `GET|PATCH|DELETE /v1/me`, `PUT|DELETE /v1/me/photo`. The account carries optional personal data (birth date, phone as digits, CNH category and expiry) and a profile photo whose object key lives in `users.photo_key`; every user response signs a fresh `photo_url` (24h) and the database never holds a URL (SPEC.md D-17). argon2id passwords, HS256 access tokens with the algorithm pinned, opaque rotating refresh tokens with reuse detection scoped to rotation alone (SPEC.md D-15), rate limiting by e-mail and by IP.
 - **vehicle** — `GET|POST /v1/vehicles`, `GET|PATCH|DELETE /v1/vehicles/{id}`, `GET|POST /v1/vehicles/{id}/odometer`, `DELETE /v1/odometer/{id}`. Ownership-based authorisation, the odometer monotonicity rule, keyset pagination.
 - **maintenance** — `GET|POST /v1/maintenance-items`, `GET|POST /v1/vehicles/{id}/maintenance-plans`, `GET|PATCH|DELETE /v1/maintenance-plans/{id}`, `GET /v1/vehicles/{id}/maintenance-profile`, `POST /v1/vehicles/{id}/maintenance-profile/answers`, `GET|POST /v1/vehicles/{id}/maintenance-records`, `GET|PATCH|DELETE /v1/maintenance-records/{id}`, `POST /v1/maintenance-records/{id}/items`. A seeded catalogue, plans materialised automatically on vehicle creation **and filtered by what the vehicle actually has**, records with line items, and the due engine.
 - **obligation** — `GET|POST /v1/vehicles/{id}/obligations`, `GET|PATCH|DELETE /v1/obligations/{id}`, `GET|POST /v1/vehicles/{id}/seguros`, `GET|PATCH|DELETE /v1/seguros/{id}`. IPVA and licenciamento share a table with an explicit `kind`; a seguro has its own, because it is a contract with a period rather than a dated debt.
@@ -243,6 +243,6 @@ Some of the facts `PRODUCT.md` lists as open were **decided during the backend b
 - **Fuel logging:** implemented as `internal/abastecimento` (volume in millilitres, full-tank consumption). Electric recharge is out of scope (`refueling.supported: false`).
 - **IPVA/licenciamento calendars:** entered by the owner. No official-data integration in the MVP.
 - **FIPE:** SPEC.md listed it as deferred until after MVP-2. **It has since been built** — `internal/catalog`, migration 000009 — because it removes four free-text fields from the registration form, which is the first screen every user sees. What is built is the *catalogue*; the *valuation history* is stored (`vehicle_fipe_prices` keyed by reference month) but nothing reads more than the latest row yet.
-- **Receipt and document images:** deferred out of MVP-1. Object storage is the only new infrastructure this project would need, and nothing depends on it yet — `docker-compose.yml` is Postgres and nothing else.
+- **Receipt and document images:** deferred out of MVP-1. The object storage they need now exists for the profile photo (a Railway Bucket in production, `storage.Memory` in development and tests), so attachments are a table and endpoints, not new infrastructure. `docker-compose.yml` is still Postgres and nothing else.
 
 Still genuinely open, and still not to be invented: notification delivery, monetization and account limits.

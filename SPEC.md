@@ -52,7 +52,7 @@ Consequências:
 |---|---|
 | Abastecimento | **Implementado.** `internal/abastecimento`, consumo por tanque cheio derivado. |
 | Despesas avulsas | Estacionamento, pedágio, lavagem, multa — categoria `expenses` no MVP-2. |
-| Anexos / fotos | **Única infra nova do projeto** (object storage). MVP-1 = só Postgres. |
+| Anexos / fotos | **Única infra nova do projeto** (object storage). A foto do perfil já usa um bucket (D-17); anexos de registro continuam fora. |
 | Push notification | O app faz pull do dashboard. Nenhuma tabela de notificação agora. |
 | Transferência de histórico | Só garantimos que a modelagem não impeça. |
 | SENATRAN / DETRAN | Nenhuma integração oficial no MVP. FIPE (catálogo) já está em `internal/catalog`. |
@@ -383,7 +383,9 @@ o `CLAUDE.md` do app.
 
 ### Identidade
 
-- **`users`** — `id`, `email` (citext, único), `password_hash`, `name`, timestamps.
+- **`users`** — `id`, `email` (citext, único), `password_hash`, `name`, timestamps, e os
+  opcionais `birth_date`, `phone` (só dígitos, com DDD), `cnh_category`, `cnh_expires_on`
+  e `photo_key` (chave no bucket, D-17).
 - **`refresh_tokens`** — token opaco rotativo. Guarda `token_hash` (sha256), nunca o token.
   Campos: `user_id`, `expires_at`, `revoked_at`, `replaced_by`. Detecção de reuso.
 - **`password_reset_tokens`** — `token_hash`, `expires_at`, `used_at`.
@@ -632,7 +634,9 @@ POST   /v1/auth/logout
 POST   /v1/auth/password-reset/request
 POST   /v1/auth/password-reset/confirm
 GET    /v1/me
-PATCH  /v1/me
+PATCH  /v1/me                                  # nome e dados pessoais, com `clear`
+PUT    /v1/me/photo                            # multipart, parte "photo" (D-17)
+DELETE /v1/me/photo
 POST   /v1/me/password                         # troca senha e mantém só esta sessão
 DELETE /v1/me                                  # LGPD — apaga tudo
 ```
@@ -1029,7 +1033,7 @@ app já instalado recebe (D-01).
 | **Consistência** | Agregado = transação. Manutenção grava record + items + reading + cache de km atomicamente |
 | **Concorrência** | Cache de km **recalculado da tabela dentro da mesma transação**, nunca incrementado. Dispensa lock explícito |
 | **Auditoria** | `created_at`/`updated_at` em tudo; `recorded_by_user_id` no histórico. **Soft delete em `vehicles`** (o histórico é o ativo do produto; um toque errado não pode destruir anos de registro), **hard delete em `odometer_readings`** (leitura digitada errado é ruído, não histórico, e deixá-la corromperia todo intervalo derivado dela). Sem tabela de audit log |
-| **LGPD** | `DELETE /v1/me` exige a senha atual e faz hard delete em cascata. Como `vehicles` não tem `user_id`, a cascata do banco não alcança os veículos: cada módulo com dado do usuário registra um `identity.UserDataEraser`, e o identity depende da **interface**, nunca do módulo. Erasers rodam antes do delete do usuário — falha de eraser não perde nada e o retry completa. Quando a transferência chegar, vira anonimização com preservação do histórico do veículo — **e isso precisa constar no aviso de privacidade desde já** |
+| **LGPD** | `DELETE /v1/me` exige a senha atual e faz hard delete em cascata. Como `vehicles` não tem `user_id`, a cascata do banco não alcança os veículos: cada módulo com dado do usuário registra um `identity.UserDataEraser`, e o identity depende da **interface**, nunca do módulo. Erasers rodam antes do delete do usuário — falha de eraser não perde nada e o retry completa. A foto do perfil sai do bucket no mesmo momento, também antes da linha (D-17). Quando a transferência chegar, vira anonimização com preservação do histórico do veículo — **e isso precisa constar no aviso de privacidade desde já** |
 | **Observabilidade** | `/healthz`, `/readyz`, logs estruturados. Nada mais até existir uma pergunta real que eles não respondam |
 | **Timezone** | `DATE` para toda data civil elimina bug de fuso. `America/Sao_Paulo` só entra no cálculo de "hoje", passado explicitamente à função pura |
 
@@ -1109,6 +1113,35 @@ produto. Os três ids respondem "de qual entrada do catálogo veio isto?"; o ret
 **O app manda um id só.** `catalog_model_year_id`; a marca e o modelo são derivados no
 servidor. Um trio inconsistente não é expressável, e um id inventado não vira FK.
 
+### D-17 — Foto do perfil num bucket privado, servida por URL assinada
+
+Em 25/09/2026 o dono pediu foto no perfil. É a primeira coisa que não cabe no Postgres, e
+é a infra nova que §1 já previa para anexos. Decisões:
+
+- **Railway Bucket (S3, privado)**, não volume. Volume no Railway prende o serviço a uma
+  réplica e a uma região, e a imagem distroless roda como nonroot, o que complica montar
+  um disco gravável. Um bucket S3 é trocável por R2, Tigris ou MinIO mudando quatro
+  variáveis.
+- **Dependência nova: `aws-sdk-go-v2/service/s3`**, o cliente de referência; o Railway
+  documenta com ele. Fica isolado em `internal/platform/storage`, atrás da interface
+  `storage.Store` (`Put`, `Delete`, `SignedURL`). Nenhum módulo importa o SDK. Em
+  development sem bucket, e nos testes, `storage.Memory` faz o papel.
+- **O banco guarda a chave, nunca a URL.** `users.photo_key`; a resposta traz
+  `photo_url`, assinada por 24 horas a cada leitura. O bucket nunca fica público.
+- **Upload pelo servidor, multipart**, e não PUT direto no bucket com URL pré-assinada. Uma
+  foto de perfil reduzida pelo app tem centenas de KB; passar pelo servidor deixa o tipo
+  ser decidido pelos bytes (`http.DetectContentType`: JPEG, PNG, WebP) e o limite (5 MB)
+  ser aplicado antes de gravar, sem um segundo passo de confirmação.
+- **Chave nova a cada foto** (`users/{id}/photo-{uuidv7}.{ext}`). Cache do app nunca mostra
+  a foto velha, e uma gravação que falhe no meio não estraga a atual. O objeto antigo só é
+  apagado depois que a linha aponta para o novo; se esse delete falhar, sobra um órfão
+  privado no log, nunca um perfil quebrado.
+- **LGPD:** `DELETE /v1/me` apaga a foto antes da linha — mesma lógica dos erasers: falhou,
+  nada se perdeu e o retry completa.
+
+Os dados pessoais que vieram junto (nascimento, telefone, categoria e validade da CNH) são
+colunas opcionais em `users`, com `clear` no PATCH como já tinham os veículos.
+
 ---
 
 ## 9. Decisões adiadas
@@ -1117,7 +1150,7 @@ Registradas com o **gatilho** que as reabre. Nenhuma deve ser implementada "por 
 
 | Decisão | Gatilho para reabrir |
 |---|---|
-| Anexos / object storage | MVP-2, junto com despesas |
+| Anexos de registro (notas, CRLV, apólice) | MVP-2, junto com despesas. O bucket e `storage.Store` já existem (D-17); falta a tabela `attachments` |
 | Push notification | Quando o pull do dashboard não bastar. Vira cron chamando a mesma função pura |
 | Denormalizar `next_due_km/date` | Quando o push precisar varrer todos os veículos em batch |
 | Ledger central de custos | Parcelamento, rateio entre pessoas, ou NF unificada |
@@ -1126,7 +1159,7 @@ Registradas com o **gatilho** que as reabre. Nenhuma deve ser implementada "por 
 | Unicidade de chassi/placa | Junto com a transferência, e só com verificação (RN-08) |
 | **Moto e outros tipos de veículo** | Carro validado. A coluna `vehicle_type` já existe desde a 1ª migration: vira seed de catálogo, **não** migration com backfill |
 | Login social (Google/Apple) | Aditivo: tabela `user_identities`. Não quebra e-mail+senha |
-| **Troca de e-mail da conta** | `PATCH /v1/me` só altera o nome. O e-mail é o canal de recuperação da conta: trocá-lo exige verificação no endereço novo e aviso ao antigo, e meio fluxo desses é pior que nenhum |
+| **Troca de e-mail da conta** | `PATCH /v1/me` altera nome e dados pessoais, nunca o e-mail. O e-mail é o canal de recuperação da conta: trocá-lo exige verificação no endereço novo e aviso ao antigo, e meio fluxo desses é pior que nenhum |
 | **Verificação de e-mail no cadastro** | Hoje a conta nasce ativa. Entra quando houver algo que dependa de e-mail confiável (transferência de histórico, cobrança) |
 | **Limpeza de tokens expirados** | A query `DeleteExpiredRefreshTokens` existe e nada a chama. Vira um cron quando a tabela crescer o bastante para importar |
 | **Limpar campo opcional do veículo** | `PATCH /v1/vehicles/{id}` usa `COALESCE`: campo ausente fica como está, e por isso não há como voltar um opcional para NULL. Precisa de um gesto explícito, não de sobrecarregar `null` — que depois de decodificado é indistinguível de "ausente" |

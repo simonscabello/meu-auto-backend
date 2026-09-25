@@ -15,6 +15,7 @@ import (
 	"github.com/simonscabello/meu-auto-backend/internal/platform/auth"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/mailer"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/ratelimit"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/storage"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/validate"
 )
 
@@ -72,6 +73,11 @@ type Service struct {
 	mail   mailer.Mailer
 	log    *slog.Logger
 
+	// photos holds profile pictures; loc is the zone "today" is decided in, for a birth
+	// date's age bounds.
+	photos storage.Store
+	loc    *time.Location
+
 	resetURL string
 	erasers  []UserDataEraser
 
@@ -85,12 +91,15 @@ type Service struct {
 }
 
 func NewService(repo *Repository, tokens *auth.TokenService, mail mailer.Mailer,
-	log *slog.Logger, resetURL string, erasers ...UserDataEraser) *Service {
+	log *slog.Logger, photos storage.Store, loc *time.Location, resetURL string,
+	erasers ...UserDataEraser) *Service {
 	return &Service{
 		repo:         repo,
 		tokens:       tokens,
 		mail:         mail,
 		log:          log,
+		photos:       photos,
+		loc:          loc,
 		resetURL:     resetURL,
 		erasers:      erasers,
 		loginByEmail: ratelimit.New(loginAttemptsPerEmail, loginWindow),
@@ -370,22 +379,6 @@ func (s *Service) Me(ctx context.Context, userID uuid.UUID) (db.User, error) {
 	return user, nil
 }
 
-// UpdateName changes the display name.
-func (s *Service) UpdateName(ctx context.Context, userID uuid.UUID, req updateMeRequest) (db.User, error) {
-	if err := req.validate(); err != nil {
-		return db.User{}, err
-	}
-
-	user, err := s.repo.UpdateUserName(ctx, userID, strings.TrimSpace(req.Name))
-	switch {
-	case errors.Is(err, ErrUserNotFound):
-		return db.User{}, apperr.Unauthorized("Sessão inválida. Entre novamente.")
-	case err != nil:
-		return db.User{}, apperr.Internal(err)
-	}
-	return user, nil
-}
-
 // ChangePassword verifies the current credential, replaces it and keeps only this device
 // signed in. Old access tokens naturally expire within their short TTL; every old refresh
 // token is revoked immediately.
@@ -479,6 +472,17 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID, req delet
 	for _, eraser := range s.erasers {
 		if err := eraser.EraseUserData(ctx, userID); err != nil {
 			s.log.Error("failed to erase user data, account not deleted",
+				slog.String("user_id", userID.String()),
+				slog.Any("error", err))
+			return apperr.Internal(err)
+		}
+	}
+
+	// The photo goes before the row, for the same reason the erasers do: once the row is
+	// gone nothing names the object, and a failed delete here can still be retried.
+	if user.PhotoKey != nil {
+		if err := s.photos.Delete(ctx, *user.PhotoKey); err != nil {
+			s.log.Error("failed to erase profile photo, account not deleted",
 				slog.String("user_id", userID.String()),
 				slog.Any("error", err))
 			return apperr.Internal(err)

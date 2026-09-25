@@ -49,6 +49,25 @@ No serviço da API, aba **Variables**:
 | `PASSWORD_RESET_URL` | `meuauto://redefinir-senha` | Deep link do app. Ajuste quando o esquema do app for definido |
 | `FIPE_API_TOKEN` | *token da fipe.online* | **Opcional, mas defina.** Sem ele o catálogo de veículos tem 500 requisições/dia; com um token gratuito, 1000. É um **segredo**: viaja como header `X-Subscription-Token`, nunca na URL, nunca no log, nunca numa resposta |
 
+### Bucket das fotos de perfil (SPEC.md D-17)
+
+O projeto tem um **Storage Bucket** chamado `meu-auto-fotos` (região `iad`, perto do
+serviço). Buckets do Railway são privados — não existe bucket público — e o app lê cada foto
+por uma URL que o servidor assina. As quatro primeiras variáveis são **obrigatórias em
+produção**: sem elas o processo recusa subir, porque fotos em memória sumiriam a cada deploy.
+
+| Variável | Valor |
+|---|---|
+| `BUCKET_ENDPOINT` | `${{meu-auto-fotos.ENDPOINT}}` |
+| `BUCKET_NAME` | `${{meu-auto-fotos.BUCKET}}` — o nome S3, com o hash, **não** `RAILWAY_BUCKET_NAME` |
+| `BUCKET_ACCESS_KEY_ID` | `${{meu-auto-fotos.ACCESS_KEY_ID}}` |
+| `BUCKET_SECRET_ACCESS_KEY` | `${{meu-auto-fotos.SECRET_ACCESS_KEY}}` |
+| `BUCKET_REGION` | `${{meu-auto-fotos.REGION}}` (normalmente `auto`) |
+| `BUCKET_PATH_STYLE` | Não defina. `true` só para bucket antigo que a aba Credentials disser que é path-style |
+
+Referências, não valores copiados: rotacionar a credencial no bucket chega ao serviço no
+próximo deploy. Cada ambiente tem o próprio bucket e as próprias credenciais.
+
 **Não defina `FIPE_API_URL`.** O padrão é a API pública v2 da Parallelum. A variável existe
 para apontar para um espelho próprio ou para um servidor de teste — não para produção.
 

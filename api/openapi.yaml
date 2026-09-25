@@ -291,7 +291,11 @@ paths:
       tags: [conta]
       summary: Atualizar a conta
       description: |
-        Só o nome. **Trocar o e-mail não está disponível**: ele é o canal de recuperação da
+        PATCH: todo campo é opcional, e o que não vier fica como está. Para esvaziar um
+        campo opcional, nomeie-o em `clear` — `null` é indistinguível de não enviar.
+        Um app que manda só `{name}` continua funcionando como antes.
+
+        **Trocar o e-mail não está disponível**: ele é o canal de recuperação da
         conta, e mudá-lo exige verificação no endereço novo e aviso ao antigo.
       requestBody:
         required: true
@@ -328,6 +332,43 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  /v1/me/photo:
+    put:
+      operationId: setMyPhoto
+      tags: [conta]
+      summary: Enviar a foto do perfil
+      description: |
+        `multipart/form-data` com a imagem na parte `photo`. JPEG, PNG ou WebP — decidido
+        pelos bytes, não pelo nome do arquivo —, até 5 MB. Substitui a foto anterior.
+
+        A resposta traz `photo_url`, uma URL assinada que expira em 24 horas; ela muda a
+        cada foto nova e a cada leitura de `/v1/me`. Não guarde a URL: leia de novo.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [photo]
+              properties:
+                photo: { type: string, format: binary }
+      responses:
+        "200":
+          description: Foto salva
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    delete:
+      operationId: deleteMyPhoto
+      tags: [conta]
+      summary: Remover a foto do perfil
+      description: Remover quando não há foto também responde 204.
+      responses:
+        "204": { description: Foto removida }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/me/password:
     post:
@@ -1717,9 +1758,31 @@ components:
 
     UpdateMeRequest:
       type: object
-      required: [name]
       properties:
-        name: { type: string, maxLength: 120 }
+        name: { type: string, maxLength: 120, description: "Não pode ficar vazio." }
+        birth_date:
+          type: string
+          format: date
+          description: Idade entre 16 e 120 anos.
+        phone:
+          type: string
+          description: |
+            Com DDD, em qualquer formato — "(11) 91234-5678", "+55 11 91234-5678". O
+            servidor guarda e devolve só os dígitos (10 ou 11).
+        cnh_category:
+          type: string
+          enum: [A, B, AB, C, D, E, AC, AD, AE]
+          description: Aceita minúsculas.
+        cnh_expires_on:
+          type: string
+          format: date
+          description: Uma CNH vencida é aceita — é um fato, não um erro.
+        clear:
+          type: array
+          items:
+            type: string
+            enum: [birth_date, phone, cnh_category, cnh_expires_on]
+          description: Campos a esvaziar. Não pode nomear um campo enviado na mesma requisição.
 
     ChangePasswordRequest:
       type: object
@@ -1736,11 +1799,28 @@ components:
 
     User:
       type: object
-      required: [id, name, email, created_at]
+      required: [id, name, email, birth_date, phone, cnh_category, cnh_expires_on, photo_url, created_at]
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
         email: { type: string, format: email }
+        birth_date: { type: string, format: date, nullable: true }
+        phone:
+          type: string
+          nullable: true
+          description: Só dígitos, com DDD — "11912345678".
+        cnh_category:
+          type: string
+          nullable: true
+          description: A, B, AB, C, D, E, AC, AD ou AE.
+        cnh_expires_on: { type: string, format: date, nullable: true }
+        photo_url:
+          type: string
+          format: uri
+          nullable: true
+          description: |
+            URL assinada da foto, válida por 24 horas. Muda a cada resposta; não guarde.
+            `null` quando não há foto — o app mostra a inicial.
         created_at: { type: string, format: date-time }
 
     Session:
