@@ -76,12 +76,9 @@ const (
 )
 
 const (
-	// SendHour is when reminders go out, in the product's time zone: the morning, with the
-	// day ahead to do something about them. Changing it is a product conversation.
-	SendHour = 9
-
-	// The job wakes this often and works only inside SendHour, so a deploy at 9:05 still
-	// sends the day's reminders, and the ones already sent are not repeated (notification_log).
+	// The job wakes this often and works only inside the sending hour, so a deploy at
+	// 9:05 still sends the day's reminders, and the ones already sent are not repeated
+	// (notification_log).
 	tickEvery = 10 * time.Minute
 
 	// A notification is read at a glance: past this many items it says how many more.
@@ -101,10 +98,14 @@ type Reminders struct {
 	location *time.Location
 	log      *slog.Logger
 	now      func() time.Time
+
+	// hour is when reminders go out, in the product's time zone — config.RemindersHour,
+	// 9 unless a test of the whole path moves it.
+	hour int
 }
 
 func NewReminders(repo *Repository, vehicles VehiclesPort, alerts AlertsPort,
-	sender push.Sender, location *time.Location, log *slog.Logger) *Reminders {
+	sender push.Sender, location *time.Location, log *slog.Logger, hour int) *Reminders {
 	return &Reminders{
 		repo:     repo,
 		vehicles: vehicles,
@@ -113,6 +114,7 @@ func NewReminders(repo *Repository, vehicles VehiclesPort, alerts AlertsPort,
 		location: location,
 		log:      log,
 		now:      time.Now,
+		hour:     hour,
 	}
 }
 
@@ -134,7 +136,7 @@ func (r *Reminders) Start(ctx context.Context) {
 
 func (r *Reminders) tick(ctx context.Context) {
 	now := r.now()
-	if now.In(r.location).Hour() != SendHour {
+	if now.In(r.location).Hour() != r.hour {
 		return
 	}
 	if _, err := r.Run(ctx, now); err != nil {

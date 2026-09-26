@@ -1183,6 +1183,8 @@ pura") virou isto, em `internal/notification` e `internal/platform/push`:
   processo e só trabalha na hora 9 de `America/Sao_Paulo`: um deploy às 9h05 não perde o
   dia, e o que venceu depois do aviso da manhã espera o de amanhã. Seguro com
   `numReplicas = 1`; com duas réplicas, quem segura o aviso dobrado é a chave única.
+  `REMINDERS_HOUR` muda a hora só para testar o caminho inteiro num celular agora; o
+  padrão é 9 e mudá-lo de vez é decisão de produto.
 - **Grava primeiro, envia depois.** Morrendo o processo entre os dois, perde-se um
   lembrete — o produto aguenta um aviso a menos, não um repetido a cada dez minutos.
 - **O token é do aparelho.** `push_devices.token` é único; registrar um token conhecido

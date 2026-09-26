@@ -118,6 +118,30 @@ func TestPushAccountThatCannotBeReadRefusesToBoot(t *testing.T) {
 	}
 }
 
+func TestRemindersGoOutAtNineUnlessToldOtherwise(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("REMINDERS_HOUR", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.RemindersHour != 9 {
+		t.Errorf("RemindersHour = %d, want 9", cfg.RemindersHour)
+	}
+
+	t.Setenv("REMINDERS_HOUR", "14")
+	if cfg, err = Load(); err != nil || cfg.RemindersHour != 14 {
+		t.Errorf("RemindersHour = %d, %v; want 14", cfg.RemindersHour, err)
+	}
+
+	for _, bad := range []string{"24", "-1", "nove"} {
+		t.Setenv("REMINDERS_HOUR", bad)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "REMINDERS_HOUR") {
+			t.Errorf("REMINDERS_HOUR=%q: err = %v, want a problem", bad, err)
+		}
+	}
+}
+
 func TestNotificationsDebugIsAFlag(t *testing.T) {
 	setValidEnv(t)
 	t.Setenv("NOTIFICATIONS_DEBUG", "true")

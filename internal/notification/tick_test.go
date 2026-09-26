@@ -24,6 +24,7 @@ func TestRemindersSleepOutsideTheSendingHour(t *testing.T) {
 				t.Fatalf("parse: %v", err)
 			}
 			r := &Reminders{
+				hour:     9,
 				location: saoPaulo,
 				log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 				// A UTC clock on purpose: the hour that counts is São Paulo's, not the

@@ -105,6 +105,7 @@ em que a chave existir.
 |---|---|---|
 | `FCM_SERVICE_ACCOUNT` | o JSON da conta de serviço do Firebase, **em base64** | Uma vez. Firebase → Configurações do projeto → Contas de serviço → Gerar nova chave privada. É segredo: não vai para o repositório nem para o chat |
 | `NOTIFICATIONS_DEBUG` | `true` | Só para conferir texto e destinatários: o aviso vai para o log em vez de sair. Ganha da chave |
+| `REMINDERS_HOUR` | a hora atual, de `0` a `23` | Só para testar o caminho inteiro num celular agora, e não amanhã às 9h: o job acorda em até 10 minutos e manda os lembretes do dia. Depois, **apague** — sem ela os lembretes saem às 9h. Os avisos que saírem nesse teste contam como os do dia (não se repetem) |
 
 Gerar o base64 no PowerShell, já na área de transferência (ajuste o caminho):
 

@@ -138,7 +138,7 @@ func New(cfg config.Config, deps Deps) App {
 		reminders = notification.NewReminders(notificationRepo,
 			reminderVehicles{vehicles: vehicleService},
 			reminderAlerts{insight: insightService},
-			deps.Push, deps.Location, deps.Log)
+			deps.Push, deps.Location, deps.Log, cfg.RemindersHour)
 	}
 
 	return App{

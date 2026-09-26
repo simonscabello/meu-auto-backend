@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/simonscabello/meu-auto-backend/internal/platform/push"
@@ -93,6 +94,12 @@ type Config struct {
 	// NotificationsDebug writes each reminder to the log instead of sending it, so the text
 	// and the recipients can be checked with no Firebase account at all.
 	NotificationsDebug bool
+
+	// RemindersHour is the hour, in America/Sao_Paulo, the reminders go out: 9 unless
+	// REMINDERS_HOUR says otherwise. The variable exists to try the whole path on a real
+	// phone now rather than tomorrow morning — set it to the current hour, see the push
+	// arrive, delete it. When reminders go out for good is a product decision, not a knob.
+	RemindersHour int
 }
 
 // appVersionPattern is the pubspec's `version:` — three numbers and, optionally, the build
@@ -108,6 +115,10 @@ func (c Config) HasBucket() bool {
 // TimeZone is the zone every civil-date decision is made in. The product is
 // Brazil-only by design (PRODUCT.md), so this is a constant, not a per-user setting.
 const TimeZone = "America/Sao_Paulo"
+
+// defaultRemindersHour: the morning, with the day ahead to do something about the
+// reminder. SPEC.md D-19.
+const defaultRemindersHour = 9
 
 // JWTIssuer is the "iss" claim on every access token. It is a constant rather than a
 // setting: changing it invalidates every token already in the wild, which is a decision,
@@ -156,6 +167,7 @@ func Load() (Config, error) {
 		AppAPKURL:        strings.TrimSpace(os.Getenv("APP_APK_URL")),
 
 		NotificationsDebug: strings.EqualFold(envOr("NOTIFICATIONS_DEBUG", "false"), "true"),
+		RemindersHour:      defaultRemindersHour,
 	}
 
 	switch cfg.AppEnv {
@@ -229,6 +241,16 @@ func Load() (Config, error) {
 	if cfg.AppAPKURL != "" {
 		if problem := checkAPKURL(cfg.AppAPKURL, cfg.IsProduction()); problem != "" {
 			problems = append(problems, problem)
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("REMINDERS_HOUR")); raw != "" {
+		hour, err := strconv.Atoi(raw)
+		if err != nil || hour < 0 || hour > 23 {
+			problems = append(problems, fmt.Sprintf(
+				"REMINDERS_HOUR must be an hour from 0 to 23, got %q", raw))
+		} else {
+			cfg.RemindersHour = hour
 		}
 	}
 
