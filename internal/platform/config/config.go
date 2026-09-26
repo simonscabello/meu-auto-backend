@@ -13,7 +13,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -66,7 +68,20 @@ type Config struct {
 	BucketSecretAccessKey string
 	BucketRegion          string
 	BucketPathStyle       bool
+
+	// The Android build the app is told it can update to (GET /v1/app-version).
+	//
+	// The APK is published as a GitHub Release, not through a store, so nothing outside the
+	// app can tell an owner that a new version exists. Both are optional, and the version is
+	// the switch: publishing a release and asking every phone to install it are separate
+	// decisions, and until APP_LATEST_VERSION names one, nobody is asked.
+	AppLatestVersion string
+	AppAPKURL        string
 }
+
+// appVersionPattern is the pubspec's `version:` — three numbers and, optionally, the build
+// number after "+". It is exactly what the app compares with its own.
+var appVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+(\+\d+)?$`)
 
 // HasBucket reports whether object storage is configured.
 func (c Config) HasBucket() bool {
@@ -118,6 +133,11 @@ func Load() (Config, error) {
 		BucketSecretAccessKey: strings.TrimSpace(os.Getenv("BUCKET_SECRET_ACCESS_KEY")),
 		BucketRegion:          strings.TrimSpace(envOr("BUCKET_REGION", "auto")),
 		BucketPathStyle:       strings.EqualFold(envOr("BUCKET_PATH_STYLE", "false"), "true"),
+
+		// The release is tagged "v1.2.0", and that is what gets pasted into the panel. The
+		// "v" is the tag's, not the version's, so it is dropped rather than refused.
+		AppLatestVersion: strings.TrimPrefix(strings.TrimSpace(os.Getenv("APP_LATEST_VERSION")), "v"),
+		AppAPKURL:        strings.TrimSpace(os.Getenv("APP_APK_URL")),
 	}
 
 	switch cfg.AppEnv {
@@ -175,11 +195,49 @@ func Load() (Config, error) {
 		}
 	}
 
+	// A version the app cannot compare would be ignored on every phone without a word, and a
+	// version with nowhere to download it asks people to do something they cannot. Railway
+	// only routes to a deploy that boots, so refusing here keeps the previous one serving.
+	if cfg.AppLatestVersion != "" {
+		if !appVersionPattern.MatchString(cfg.AppLatestVersion) {
+			problems = append(problems, fmt.Sprintf(
+				`APP_LATEST_VERSION must look like "1.2.0" or "1.2.0+7", got %q`,
+				cfg.AppLatestVersion))
+		}
+		if cfg.AppAPKURL == "" {
+			problems = append(problems, "APP_APK_URL is required when APP_LATEST_VERSION is set")
+		}
+	}
+	if cfg.AppAPKURL != "" {
+		if problem := checkAPKURL(cfg.AppAPKURL, cfg.IsProduction()); problem != "" {
+			problems = append(problems, problem)
+		}
+	}
+
 	if len(problems) > 0 {
 		return Config{}, fmt.Errorf("invalid configuration:\n  - %s",
 			strings.Join(problems, "\n  - "))
 	}
 	return cfg, nil
+}
+
+// checkAPKURL returns what is wrong with the download link, or "" when nothing is.
+//
+// Plain http is allowed outside production, so the whole flow can be tried against a file
+// served from the development machine; a phone must never be sent to fetch an installer
+// over a connection anyone on the network can rewrite.
+func checkAPKURL(raw string, production bool) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Sprintf("APP_APK_URL must be an absolute URL, got %q", raw)
+	}
+	switch {
+	case u.Scheme == "https":
+	case u.Scheme == "http" && !production:
+	default:
+		return fmt.Sprintf("APP_APK_URL must use https, got %q", raw)
+	}
+	return ""
 }
 
 // corsDefaultFor picks the default browser origin policy.

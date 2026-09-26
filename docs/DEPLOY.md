@@ -77,6 +77,23 @@ para apontar para um espelho próprio ou para um servidor de teste — não para
 > apertar, o sinal é `upstream_unavailable` no log com `status: 429` — a resposta é comprar
 > um plano, não mexer no código.
 
+### Aviso de versão nova do app (`GET /v1/app-version`)
+
+O APK é publicado como Release no GitHub pelo workflow do repositório do app
+(`meu-auto-app/.github/workflows/release-apk.yml`), não numa loja — então só o próprio app
+pode avisar que existe versão nova, e é esta rota que diz a ele.
+
+| Variável | Valor | Quando |
+|---|---|---|
+| `APP_APK_URL` | `https://github.com/simonscabello/meu-auto-app/releases/latest/download/meu-auto.apk` | **Uma vez, e nunca mais.** `latest/download` segue sozinho o Release mais novo, e o workflow publica sempre uma cópia de nome fixo `meu-auto.apk` |
+| `APP_LATEST_VERSION` | a versão do Release, ex. `1.2.0` | **A cada versão**, depois que o Release aparecer no GitHub. Aceita `v1.2.0` (o `v` da tag é descartado) e o build depois do `+` |
+
+Sem `APP_LATEST_VERSION` nenhum celular é avisado — é o estado normal enquanto um Release
+é testado. Publicar o arquivo e pedir que todos instalem são decisões separadas, e a
+segunda é esta variável. Uma versão fora do formato, ou uma versão sem `APP_APK_URL`, faz o
+processo recusar subir; como o Railway só encaminha tráfego para o deploy que passa no
+`/healthz`, o anterior continua no ar e o erro fica no log do deploy.
+
 **Não defina `PORT`** — o Railway injeta.
 
 **Não defina `CORS_ORIGINS`.** Em produção o padrão é vazio, que é o correto: o único

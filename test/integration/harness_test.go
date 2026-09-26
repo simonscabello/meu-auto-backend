@@ -68,6 +68,14 @@ func withFipeServer(baseURL string) envOption {
 	return func(cfg *config.Config) { cfg.FipeAPIURL = baseURL }
 }
 
+// withAppRelease announces an Android build, as APP_LATEST_VERSION and APP_APK_URL would.
+func withAppRelease(version, apkURL string) envOption {
+	return func(cfg *config.Config) {
+		cfg.AppLatestVersion = version
+		cfg.AppAPKURL = apkURL
+	}
+}
+
 var emailCounter atomic.Uint64
 
 // env is one test's world: its own database, its own router, its own rate limiters.

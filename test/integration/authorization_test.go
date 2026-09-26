@@ -459,6 +459,9 @@ func TestEveryProtectedRouteIsInTheMatrix(t *testing.T) {
 		"POST /v1/auth/logout":                 true,
 		"POST /v1/auth/password-reset/request": true,
 		"POST /v1/auth/password-reset/confirm": true,
+		// A version number and a public download link. It has to reach a phone whose
+		// session is the thing that broke — see release.Handler.Mount.
+		"GET /v1/app-version": true,
 	}
 
 	covered := map[string]bool{}

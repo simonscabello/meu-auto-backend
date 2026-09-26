@@ -192,3 +192,106 @@ func TestDevelopmentRunsWithoutBucket(t *testing.T) {
 		t.Errorf("BucketRegion = %q, want auto", cfg.BucketRegion)
 	}
 }
+
+func setProductionEnv(t *testing.T) {
+	t.Helper()
+	setValidEnv(t)
+	setBucketEnv(t)
+	t.Setenv("APP_ENV", EnvProduction)
+	t.Setenv("CORS_ORIGINS", "")
+	t.Setenv("RESEND_API_KEY", "re_test")
+	t.Setenv("MAIL_FROM", "Meu Auto <nao-responda@meuauto.com.br>")
+}
+
+const testAPKURL = "https://github.com/simonscabello/meu-auto-app/releases/latest/download/meu-auto.apk"
+
+// Nothing announced is the normal state, and the one a new deploy starts in.
+func TestAppReleaseIsOptional(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("APP_LATEST_VERSION", "")
+	t.Setenv("APP_APK_URL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.AppLatestVersion != "" || cfg.AppAPKURL != "" {
+		t.Errorf("app release = %q, %q, want both empty", cfg.AppLatestVersion, cfg.AppAPKURL)
+	}
+}
+
+// The link is set once and outlives every release; the version follows each one.
+func TestAppReleaseLinkWithoutVersion(t *testing.T) {
+	setProductionEnv(t)
+	t.Setenv("APP_LATEST_VERSION", "")
+	t.Setenv("APP_APK_URL", testAPKURL)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.AppAPKURL != testAPKURL {
+		t.Errorf("AppAPKURL = %q, want %q", cfg.AppAPKURL, testAPKURL)
+	}
+}
+
+// The release is tagged "v1.2.0" and that is what gets pasted into the panel.
+func TestAppReleaseVersionIsNormalised(t *testing.T) {
+	for raw, want := range map[string]string{
+		"1.2.0":      "1.2.0",
+		"1.2.0+7":    "1.2.0+7",
+		"v1.2.0":     "1.2.0",
+		" v1.2.0+7 ": "1.2.0+7",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			setProductionEnv(t)
+			t.Setenv("APP_LATEST_VERSION", raw)
+			t.Setenv("APP_APK_URL", testAPKURL)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v, want nil", err)
+			}
+			if cfg.AppLatestVersion != want {
+				t.Errorf("AppLatestVersion = %q, want %q", cfg.AppLatestVersion, want)
+			}
+		})
+	}
+}
+
+// Every one of these would reach the phones as a notice nobody can act on, or as none at
+// all — so the deploy stops instead, and the previous one keeps serving.
+func TestAppReleaseRejectsWhatThePhoneCannotUse(t *testing.T) {
+	cases := []struct {
+		name, version, url, want string
+	}{
+		{"version the app cannot compare", "1.2", testAPKURL, "APP_LATEST_VERSION"},
+		{"words for a version", "latest", testAPKURL, "APP_LATEST_VERSION"},
+		{"version with nowhere to download", "1.2.0", "", "APP_APK_URL is required"},
+		{"link that is not a link", "", "meu-auto.apk", "APP_APK_URL"},
+		{"installer over plain http", "1.2.0", "http://example.com/meu-auto.apk", "https"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setProductionEnv(t)
+			t.Setenv("APP_LATEST_VERSION", tc.version)
+			t.Setenv("APP_APK_URL", tc.url)
+
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Load() = %v, want an error mentioning %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// Development may serve the file from the machine itself, which has no certificate.
+func TestAppReleaseAllowsHTTPInDevelopment(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("APP_LATEST_VERSION", "1.2.0")
+	t.Setenv("APP_APK_URL", "http://10.0.2.2:8000/meu-auto.apk")
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+}

@@ -1,0 +1,7 @@
+{
+  "body": {
+    "apk_url": "string",
+    "latest_version": "string"
+  },
+  "status": 200
+}

@@ -79,6 +79,8 @@ tags:
     description: Abastecimentos e consumo por tanque cheio
   - name: telas
     description: Read models — dashboard, alertas e linha do tempo
+  - name: app
+    description: A versão do app Android oferecida para atualizar
   - name: operacao
     description: Sondas de saúde
 
@@ -131,6 +133,31 @@ paths:
                 properties:
                   status: { type: string, example: unavailable }
                   reason: { type: string, example: database }
+
+  # ---------------------------------------------------------------- app
+  /v1/app-version:
+    get:
+      operationId: getAppVersion
+      tags: [app]
+      summary: Versão do app Android oferecida para atualizar
+      description: |
+        O APK é publicado como Release no GitHub, não numa loja, então só o próprio app
+        pode avisar que existe uma versão nova. Esta rota é o aviso: devolve a versão e o
+        link de download configurados no servidor (`APP_LATEST_VERSION`, `APP_APK_URL`).
+        O app compara `latest_version` com a própria versão e, se for maior, oferece
+        "Atualizar".
+
+        **Pública de propósito.** A resposta é um número de versão e um link público, e o
+        aviso precisa chegar justamente ao app cuja sessão ou cujo parse quebrou.
+
+        Os dois campos vêm sempre, e `null` enquanto nada foi anunciado.
+      security: []
+      responses:
+        "200":
+          description: A versão anunciada, ou nenhuma
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppVersion" }
 
   # ---------------------------------------------------------------- auth
   /v1/auth/register:
@@ -1556,6 +1583,30 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    # ------------------------------------------------------------ app
+    AppVersion:
+      type: object
+      required: [latest_version, apk_url]
+      properties:
+        latest_version:
+          type: string
+          nullable: true
+          pattern: '^\d+\.\d+\.\d+(\+\d+)?$'
+          example: "1.2.0+7"
+          description: |
+            A versão do APK publicado, no formato do `version:` do pubspec — com ou sem o
+            número de build depois do `+`. Comparada número a número; uma versão sem build
+            conta como build 0. `null` quando nada foi anunciado.
+        apk_url:
+          type: string
+          format: uri
+          nullable: true
+          example: https://github.com/simonscabello/meu-auto-app/releases/latest/download/meu-auto.apk
+          description: |
+            De onde baixar o APK. Aponta para `releases/latest/download`, que acompanha
+            sozinho o Release mais novo, então não muda a cada versão. Sempre presente
+            quando `latest_version` também está.
+
     # ------------------------------------------------------------ erro
     Error:
       type: object

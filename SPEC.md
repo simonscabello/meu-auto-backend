@@ -1142,6 +1142,26 @@ Em 25/09/2026 o dono pediu foto no perfil. É a primeira coisa que não cabe no 
 Os dados pessoais que vieram junto (nascimento, telefone, categoria e validade da CNH) são
 colunas opcionais em `users`, com `clear` no PATCH como já tinham os veículos.
 
+### D-18 — APK por GitHub Releases, e o servidor avisa a versão
+
+Em 26/09/2026 o dono pediu o fluxo que o outro app dele (Pauta) já usa: o APK sai do CI
+como Release do GitHub, e o app avisa que há versão nova. Sem loja, nada fora do app pode
+dar esse aviso. Decisões:
+
+- **O build é do workflow do repositório do app**, disparado por uma tag `v*` que precisa
+  bater com o `version:` do pubspec, e assinado sempre com a mesma chave de upload (Android
+  recusa instalar por cima com chave diferente). Cada Release publica também uma cópia de
+  nome fixo, `meu-auto.apk`.
+- **O servidor só lê duas variáveis** (`APP_LATEST_VERSION`, `APP_APK_URL`) e as devolve em
+  `GET /v1/app-version`, pública. Nenhuma tabela: a versão é configuração, e trocá-la é um
+  deploy de variável, não de código.
+- **Publicar e anunciar são passos separados.** O Release pode existir dias antes de
+  `APP_LATEST_VERSION` subir; enquanto não sobe, ninguém é cobrado. O `APP_APK_URL` aponta
+  para `releases/latest/download/meu-auto.apk` e não muda mais.
+- **Sem versão mínima obrigatória.** O aviso é um convite, nunca um bloqueio: impedir o uso
+  de um app antigo é decisão de produto, e continua valendo D-01 — versões antigas seguem
+  chamando esta API.
+
 ---
 
 ## 9. Decisões adiadas

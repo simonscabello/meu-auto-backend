@@ -26,6 +26,7 @@ import (
 	"github.com/simonscabello/meu-auto-backend/internal/platform/config"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/mailer"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/storage"
+	"github.com/simonscabello/meu-auto-backend/internal/release"
 	"github.com/simonscabello/meu-auto-backend/internal/vehicle"
 )
 
@@ -106,6 +107,10 @@ func New(cfg config.Config, deps Deps) http.Handler {
 		cfg.TrustProxy,
 	)
 
+	// The release notice depends on nothing but configuration: no database, no module.
+	releaseHandler := release.NewHandler(cfg.AppLatestVersion, cfg.AppAPKURL)
+
 	return newRouter(cfg, deps.Pool, identityHandler, vehicleHandler, catalogHandler,
-		maintenanceHandler, obligationHandler, abastecimentoHandler, insightHandler)
+		maintenanceHandler, obligationHandler, abastecimentoHandler, insightHandler,
+		releaseHandler)
 }

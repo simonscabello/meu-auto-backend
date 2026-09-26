@@ -41,7 +41,16 @@ func TestGoldenResponses(t *testing.T) {
 	// serves the real payload shapes, which is what makes the recorded response shape the
 	// one a device will actually receive.
 	fipe := newFakeFipe(t)
-	e := newEnv(t, withFipeServer(fipe.URL))
+	e := newEnv(t, withFipeServer(fipe.URL),
+		withAppRelease("1.1.0+2", "https://example.test/meu-auto.apk"))
+
+	// ---------- app release ----------
+	//
+	// Announced, so both leaves are strings; unannounced they are null, which
+	// TestAppVersion covers.
+
+	assertGolden(t, "app_version",
+		e.anonymous().get("/v1/app-version").expect(http.StatusOK))
 
 	// ---------- identity ----------
 

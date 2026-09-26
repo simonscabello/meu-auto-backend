@@ -151,6 +151,8 @@ gofmt -l .                           # see the CRLF note below before believing 
 - **insight** — `GET /v1/vehicles/{id}/{dashboard,alerts,timeline}`. The read model.
 - **catalog** — `GET /v1/vehicle-brands`, `GET /v1/vehicle-brands/{id}/models`, `GET /v1/vehicle-models/{id}/years`, `GET /v1/vehicle-model-years/{id}`. The vehicle catalogue, mirrored from the FIPE table so registration is three dropdowns instead of three free-text fields. **The only module that talks to a third party.**
 
+**`internal/release` is configuration read back, not a domain module.** `GET /v1/app-version` — public, like the probes — tells the Android app which build it can update to, from `APP_LATEST_VERSION` and `APP_APK_URL`, both validated at boot. The APK is a GitHub Release built by the app repo's workflow, not a store listing, so this route is the only way an installed app hears that a new version exists. Publishing a release and announcing it are separate steps, and the announcement is the variable (`docs/DEPLOY.md`). No service, no repository, no table: a minimum supported version, if one is ever wanted, is a product decision first.
+
 **There is no universal maintenance plan, and there is no vehicle profile table.** An electric car has no engine oil; a diesel has no spark plugs. `maintenance_plans` is already the row joining one vehicle to one catalogue item with its own intervals and origin — it **is** the profile, and migration 000010 gave it the three facts it was missing (SPEC.md RN-11). Five things follow, and each one is load-bearing:
 
 - **`suggest_by_default` says an item is worth offering. It does NOT say the vehicle has the component.** Treating it as though it did is what put a timing belt, spark plugs and an oil change on every car in the database.
