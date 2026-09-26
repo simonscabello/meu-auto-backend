@@ -57,7 +57,7 @@ func TestGetNotApplicablePlanByID(t *testing.T) {
 		t.Fatal("electric vehicle has no not_applicable troca_oleo plan to fetch")
 	}
 
-	got := u.get("/v1/maintenance-plans/"+oil.ID).expect(http.StatusOK).json()
+	got := u.get("/v1/maintenance-plans/" + oil.ID).expect(http.StatusOK).json()
 	if got["strategy"] != "not_applicable" {
 		t.Errorf("strategy = %v, want not_applicable", got["strategy"])
 	}

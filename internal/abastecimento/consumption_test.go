@@ -134,12 +134,12 @@ func TestSameDaySortsByCreatedAt(t *testing.T) {
 
 	day := mustDay("2026-01-10")
 	a := Fill{
-		ID: uuid.MustParse("00000000-0000-0000-0000-00000000000a"),
+		ID:         uuid.MustParse("00000000-0000-0000-0000-00000000000a"),
 		OccurredOn: day, CreatedAt: day,
 		MileageKm: 90_000, VolumeMl: 40_000, FullTank: true,
 	}
 	b := Fill{
-		ID: uuid.MustParse("00000000-0000-0000-0000-00000000000b"),
+		ID:         uuid.MustParse("00000000-0000-0000-0000-00000000000b"),
 		OccurredOn: day, CreatedAt: day.Add(time.Hour),
 		MileageKm: 91_000, VolumeMl: 50_000, FullTank: true,
 	}
@@ -153,12 +153,12 @@ func TestSameInstantSortsByID(t *testing.T) {
 
 	day := mustDay("2026-01-10")
 	a := Fill{
-		ID: uuid.MustParse("00000000-0000-0000-0000-00000000000a"),
+		ID:         uuid.MustParse("00000000-0000-0000-0000-00000000000a"),
 		OccurredOn: day, CreatedAt: day,
 		MileageKm: 90_000, VolumeMl: 40_000, FullTank: true,
 	}
 	b := Fill{
-		ID: uuid.MustParse("00000000-0000-0000-0000-00000000000b"),
+		ID:         uuid.MustParse("00000000-0000-0000-0000-00000000000b"),
 		OccurredOn: day, CreatedAt: day,
 		MileageKm: 91_000, VolumeMl: 50_000, FullTank: true,
 	}

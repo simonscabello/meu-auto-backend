@@ -133,14 +133,14 @@ func TestDashboardCostsKeepTrackedCentsWithoutFuel(t *testing.T) {
 
 	var dashboard struct {
 		Costs struct {
-			MaintenanceCents  int64    `json:"maintenance_cents"`
-			ObligationsCents  int64    `json:"obligations_cents"`
-			SeguroCents       int64    `json:"seguro_cents"`
-			TrackedCents      int64    `json:"tracked_cents"`
-			TrackedCategories []string `json:"tracked_categories"`
-			AbastecimentoCents int64   `json:"abastecimento_cents"`
-			TotalCents        int64    `json:"total_cents"`
-			Categories        []struct {
+			MaintenanceCents   int64    `json:"maintenance_cents"`
+			ObligationsCents   int64    `json:"obligations_cents"`
+			SeguroCents        int64    `json:"seguro_cents"`
+			TrackedCents       int64    `json:"tracked_cents"`
+			TrackedCategories  []string `json:"tracked_categories"`
+			AbastecimentoCents int64    `json:"abastecimento_cents"`
+			TotalCents         int64    `json:"total_cents"`
+			Categories         []struct {
 				Key   string `json:"key"`
 				Label string `json:"label"`
 				Cents int64  `json:"cents"`
