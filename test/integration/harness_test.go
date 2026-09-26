@@ -24,7 +24,9 @@ import (
 	"time"
 
 	"github.com/simonscabello/meu-auto-backend/internal/app"
+	"github.com/simonscabello/meu-auto-backend/internal/notification"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/config"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/push"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/storage"
 	"github.com/simonscabello/meu-auto-backend/test/testdb"
 )
@@ -88,6 +90,11 @@ type env struct {
 	// photos is the in-memory bucket, read back by the photo tests.
 	photos *storage.Memory
 
+	// pushes captures the reminders instead of sending them, and reminders is the job
+	// that produces them — the same one cmd/api starts, run here with the clock at nine.
+	pushes    *capturePush
+	reminders *notification.Reminders
+
 	// location is what the API resolves "today" against. Tests that care about a due date
 	// compute the expected value from env.today() rather than from time.Now, so a run at
 	// 23:50 in São Paulo does not disagree with the server about which day it is.
@@ -110,6 +117,7 @@ func newEnv(t *testing.T, opts ...envOption) *env {
 
 	mail := &captureMailer{}
 	photos := storage.NewMemory()
+	pushes := &capturePush{dead: map[string]bool{}}
 
 	cfg := config.Config{
 		AppEnv:           config.EnvDevelopment,
@@ -126,19 +134,24 @@ func newEnv(t *testing.T, opts ...envOption) *env {
 		opt(&cfg)
 	}
 
+	application := app.New(cfg, app.Deps{
+		Pool:     db.Pool,
+		Mailer:   mail,
+		Location: location,
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Photos:   photos,
+		Push:     pushes,
+	})
+
 	return &env{
-		t:  t,
-		db: db,
-		handler: app.New(cfg, app.Deps{
-			Pool:     db.Pool,
-			Mailer:   mail,
-			Location: location,
-			Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
-			Photos:   photos,
-		}),
-		mailer:   mail,
-		photos:   photos,
-		location: location,
+		t:         t,
+		db:        db,
+		handler:   application.Handler,
+		mailer:    mail,
+		photos:    photos,
+		pushes:    pushes,
+		reminders: application.Reminders,
+		location:  location,
 	}
 }
 
@@ -364,6 +377,26 @@ func (r *response) id() string {
 
 // captureMailer stands in for Resend. It records instead of sending, so the password reset
 // flow can be tested end to end — including the token, which never appears in a response.
+// capturePush stands in for FCM: it records every message, and answers "unregistered"
+// for the tokens a test marks as dead.
+type capturePush struct {
+	sent []sentPush
+	dead map[string]bool
+}
+
+type sentPush struct {
+	Token   string
+	Message push.Message
+}
+
+func (p *capturePush) Send(_ context.Context, token string, msg push.Message) error {
+	if p.dead[token] {
+		return push.ErrUnregistered
+	}
+	p.sent = append(p.sent, sentPush{Token: token, Message: msg})
+	return nil
+}
+
 type captureMailer struct {
 	sent []sentEmail
 }

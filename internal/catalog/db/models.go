@@ -90,6 +90,17 @@ type MaintenanceRecordItem struct {
 	CreatedAt           time.Time
 }
 
+type NotificationLog struct {
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	VehicleID uuid.UUID
+	Kind      string
+	SubjectID uuid.UUID
+	Marker    string
+	SentOn    time.Time
+	CreatedAt time.Time
+}
+
 type OdometerReading struct {
 	ID                    uuid.UUID
 	VehicleID             uuid.UUID
@@ -110,6 +121,15 @@ type PasswordResetToken struct {
 	ExpiresAt time.Time
 	UsedAt    *time.Time
 	CreatedAt time.Time
+}
+
+type PushDevice struct {
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	Token      string
+	Platform   string
+	CreatedAt  time.Time
+	LastSeenAt time.Time
 }
 
 type RefreshToken struct {

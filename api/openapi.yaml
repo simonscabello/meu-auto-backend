@@ -81,6 +81,8 @@ tags:
     description: Read models — dashboard, alertas e linha do tempo
   - name: app
     description: A versão do app Android oferecida para atualizar
+  - name: avisos
+    description: Os aparelhos que recebem os lembretes push
   - name: operacao
     description: Sondas de saúde
 
@@ -422,6 +424,53 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+
+  # ---------------------------------------------------------------- avisos
+  /v1/me/devices:
+    post:
+      operationId: registerDevice
+      tags: [avisos]
+      summary: Receber lembretes neste aparelho
+      description: |
+        Registra, ou reconfirma, o token do Firebase Cloud Messaging deste aparelho. Os
+        lembretes saem às 9h (horário de Brasília): um por carro por dia, quando um item
+        entra em "vence em breve", quando vence — e, para IPVA, licenciamento e seguro, no
+        próprio dia do vencimento. Cada etapa de cada item é avisada uma vez.
+
+        O token é da instalação, não da pessoa: um token já registrado por outra conta
+        passa para esta (outra pessoa entrou no mesmo celular). Registrar de novo o mesmo
+        token é seguro e só renova a confirmação. Só `android` por enquanto.
+
+        O `data` de cada aviso traz `kind: "reminder"` e `vehicle_id`; com um item só,
+        também `reference_type` e `reference_id`, nos mesmos termos de `Alert` — o app abre
+        esse item como abriria o alerta. Com vários, abre a lista de alertas do carro.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterDeviceRequest" }
+      responses:
+        "204": { description: Aparelho registrado }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationFailed" }
+    delete:
+      operationId: forgetDevice
+      tags: [avisos]
+      summary: Parar os lembretes neste aparelho
+      description: |
+        Esquece o aparelho. O app chama ao sair da conta, **antes** de descartar a sessão —
+        depois ele não conseguiria se autenticar, e quem entrasse no celular receberia os
+        lembretes do dono anterior. Só apaga o registro de quem chama; um token que não
+        está registrado também responde 204.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ForgetDeviceRequest" }
+      responses:
+        "204": { description: Aparelho esquecido }
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "422": { $ref: "#/components/responses/ValidationFailed" }
 
   # ---------------------------------------------------------------- veículos
@@ -1583,6 +1632,27 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    # ------------------------------------------------------------ avisos
+    RegisterDeviceRequest:
+      type: object
+      required: [token, platform]
+      properties:
+        token:
+          type: string
+          maxLength: 4096
+          description: O registration token do Firebase Cloud Messaging.
+        platform:
+          type: string
+          enum: [android]
+
+    ForgetDeviceRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          maxLength: 4096
+
     # ------------------------------------------------------------ app
     AppVersion:
       type: object

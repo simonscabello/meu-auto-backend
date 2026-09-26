@@ -114,6 +114,19 @@ func protectedRoutes() []protectedRoute {
 			func(*ownedResources) any { return map[string]any{"password": "irrelevante-aqui"} },
 			callerScoped},
 
+		// ---------- notification ----------
+		// A phone is the caller's own; the token names it, and forgetting one somebody
+		// else registered only ever touches the caller's rows (notification_test.go).
+		{http.MethodPost, "/v1/me/devices",
+			func(*ownedResources) string { return "/v1/me/devices" },
+			func(*ownedResources) any {
+				return map[string]any{"token": "matrix-device-token", "platform": "android"}
+			}, callerScoped},
+		{http.MethodDelete, "/v1/me/devices",
+			func(*ownedResources) string { return "/v1/me/devices" },
+			func(*ownedResources) any { return map[string]any{"token": "matrix-device-token"} },
+			callerScoped},
+
 		// ---------- vehicle ----------
 		{http.MethodGet, "/v1/vehicles",
 			func(*ownedResources) string { return "/v1/vehicles" }, nil, callerScoped},

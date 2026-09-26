@@ -31,6 +31,7 @@ import (
 	"github.com/simonscabello/meu-auto-backend/internal/platform/database"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/logging"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/mailer"
+	"github.com/simonscabello/meu-auto-backend/internal/platform/push"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/storage"
 )
 
@@ -117,15 +118,33 @@ func run() error {
 		photos = storage.NewMemory()
 	}
 
+	// Reminders are optional, like the catalogue token: without a key the API works exactly
+	// as before and nothing is recorded as sent. The debug switch wins over a key, so the
+	// text can be checked against real data without anybody's phone buzzing.
+	var sender push.Sender
+	switch {
+	case cfg.NotificationsDebug:
+		log.Warn("NOTIFICATIONS_DEBUG is on: push reminders are written to the log, not sent")
+		sender = push.Log{Logger: log}
+	case cfg.FCMAccount != nil:
+		log.Info("push reminders on", slog.String("firebase_project", cfg.FCMAccount.ProjectID))
+		sender = push.NewFCM(*cfg.FCMAccount)
+	default:
+		log.Info("FCM_SERVICE_ACCOUNT is not set: push reminders are off")
+	}
+
+	application := app.New(cfg, app.Deps{
+		Pool:     pool,
+		Mailer:   mail,
+		Location: location,
+		Log:      log,
+		Photos:   photos,
+		Push:     sender,
+	})
+
 	server := &http.Server{
-		Addr: net.JoinHostPort("", cfg.Port),
-		Handler: app.New(cfg, app.Deps{
-			Pool:     pool,
-			Mailer:   mail,
-			Location: location,
-			Log:      log,
-			Photos:   photos,
-		}),
+		Addr:    net.JoinHostPort("", cfg.Port),
+		Handler: application.Handler,
 
 		// Without these a single slow or malicious client can hold a connection open
 		// indefinitely. Go applies no timeouts by default.
@@ -153,6 +172,13 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(),
 		os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// The morning job lives as long as the process and stops with the same signal. A
+	// reminder half-way through a run when the signal comes is recorded or not, and either
+	// way it is never sent twice (notification_log).
+	if application.Reminders != nil {
+		go application.Reminders.Start(ctx)
+	}
 
 	select {
 	case err := <-serverErr:

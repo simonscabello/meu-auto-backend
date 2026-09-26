@@ -13,6 +13,7 @@ import (
 	"github.com/simonscabello/meu-auto-backend/internal/identity"
 	"github.com/simonscabello/meu-auto-backend/internal/insight"
 	"github.com/simonscabello/meu-auto-backend/internal/maintenance"
+	"github.com/simonscabello/meu-auto-backend/internal/notification"
 	"github.com/simonscabello/meu-auto-backend/internal/obligation"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/apperr"
 	"github.com/simonscabello/meu-auto-backend/internal/platform/config"
@@ -41,6 +42,7 @@ func newRouter(
 	abastecimentoHandler *abastecimento.Handler,
 	insightHandler *insight.Handler,
 	releaseHandler *release.Handler,
+	notificationHandler *notification.Handler,
 ) http.Handler {
 	r := chi.NewRouter()
 
@@ -92,6 +94,7 @@ func newRouter(
 		abastecimentoHandler.Mount(r)
 		insightHandler.Mount(r)
 		releaseHandler.Mount(r)
+		notificationHandler.Mount(r)
 	})
 
 	return r

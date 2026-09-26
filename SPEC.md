@@ -53,7 +53,7 @@ Consequências:
 | Abastecimento | **Implementado.** `internal/abastecimento`, consumo por tanque cheio derivado. |
 | Despesas avulsas | Estacionamento, pedágio, lavagem, multa — categoria `expenses` no MVP-2. |
 | Anexos / fotos | **Única infra nova do projeto** (object storage). A foto do perfil já usa um bucket (D-17); anexos de registro continuam fora. |
-| Push notification | O app faz pull do dashboard. Nenhuma tabela de notificação agora. |
+| Push notification | **Implementado** (D-19): lembretes às 9h, derivados dos mesmos alertas; só aparelhos e o registro do que já foi dito são guardados. |
 | Transferência de histórico | Só garantimos que a modelagem não impeça. |
 | SENATRAN / DETRAN | Nenhuma integração oficial no MVP. FIPE (catálogo) já está em `internal/catalog`. |
 
@@ -639,6 +639,8 @@ PUT    /v1/me/photo                            # multipart, parte "photo" (D-17)
 DELETE /v1/me/photo
 POST   /v1/me/password                         # troca senha e mantém só esta sessão
 DELETE /v1/me                                  # LGPD — apaga tudo
+POST   /v1/me/devices                          # este aparelho recebe lembretes (D-19)
+DELETE /v1/me/devices                          # ao sair da conta, antes de descartar a sessão
 ```
 
 ### Veículos
@@ -1162,6 +1164,39 @@ dar esse aviso. Decisões:
   de um app antigo é decisão de produto, e continua valendo D-01 — versões antigas seguem
   chamando esta API.
 
+### D-19 — Lembretes push: derivados, deduplicados, uma vez por etapa
+
+Em 26/09/2026 o dono escolheu os lembretes push como a próxima entrega (etapa "Retenção"
+do roadmap), no desenho do Pauta. O que o SPEC adiava ("vira cron chamando a mesma função
+pura") virou isto, em `internal/notification` e `internal/platform/push`:
+
+- **A regra continua derivada.** O job lê a mesma lista de alertas que o app mostra
+  (`insight.Service.Alerts`, por um port declarado no próprio módulo, adaptado em
+  `internal/app`) — nada decide aqui o que está vencido, e um aviso nunca discorda da tela
+  que abre. Ficam guardados só `push_devices` (para onde mandar) e `notification_log` (o
+  que cada pessoa já ouviu). RN-06 e RN-06b continuam valendo.
+- **Etapas, não repetição.** Cada item é avisado uma vez ao entrar em "vence em breve",
+  uma vez ao vencer e, para IPVA, licenciamento e seguro, também no próprio dia. A chave
+  única `(user_id, kind, subject_id, marker)` é a deduplicação; `marker` é o ponto de
+  vencimento (`data|km`), então a próxima troca de óleo reabre o aviso.
+- **Às 9h, um aviso por carro por dia.** O job acorda a cada 10 minutos dentro do
+  processo e só trabalha na hora 9 de `America/Sao_Paulo`: um deploy às 9h05 não perde o
+  dia, e o que venceu depois do aviso da manhã espera o de amanhã. Seguro com
+  `numReplicas = 1`; com duas réplicas, quem segura o aviso dobrado é a chave única.
+- **Grava primeiro, envia depois.** Morrendo o processo entre os dois, perde-se um
+  lembrete — o produto aguenta um aviso a menos, não um repetido a cada dez minutos.
+- **O token é do aparelho.** `push_devices.token` é único; registrar um token conhecido
+  move a linha para o novo dono. O app esquece o aparelho ao sair da conta, antes de
+  descartar a sessão. Token que o FCM diz não conhecer é apagado na hora.
+- **Transporte opcional e trocável.** FCM pela API HTTP v1, com a asserção OAuth assinada
+  pelo `golang-jwt` que já estava no projeto — sem o Admin SDK. Sem `FCM_SERVICE_ACCOUNT`
+  não existe job (e nada é registrado como enviado); `NOTIFICATIONS_DEBUG=true` loga em vez
+  de enviar. Chave ilegível recusa o boot.
+- **Só Android.** iOS precisa de chave APNs e de um build que este projeto ainda não faz.
+- **Fora desta versão, decidido:** preferências por tipo e antecedência (item próprio do
+  roadmap), central de avisos no app, aviso de versão nova por push, lembrete de
+  atualizar a quilometragem.
+
 ---
 
 ## 9. Decisões adiadas
@@ -1171,8 +1206,7 @@ Registradas com o **gatilho** que as reabre. Nenhuma deve ser implementada "por 
 | Decisão | Gatilho para reabrir |
 |---|---|
 | Anexos de registro (notas, CRLV, apólice) | MVP-2, junto com despesas. O bucket e `storage.Store` já existem (D-17); falta a tabela `attachments` |
-| Push notification | Quando o pull do dashboard não bastar. Vira cron chamando a mesma função pura |
-| Denormalizar `next_due_km/date` | Quando o push precisar varrer todos os veículos em batch |
+| Denormalizar `next_due_km/date` | O push (D-19) varre veículo a veículo pelos alertas do insight. Reabre quando essa varredura das 9h passar de alguns minutos |
 | Ledger central de custos | Parcelamento, rateio entre pessoas, ou NF unificada |
 | `vehicle_components` | Posição de pneu, troca parcial ou rodízio |
 | Transferência de histórico | Produto validado. Exige verificação de propriedade e seleção explícita do que vai junto |

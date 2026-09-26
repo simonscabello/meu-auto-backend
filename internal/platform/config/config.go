@@ -10,6 +10,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,6 +18,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/simonscabello/meu-auto-backend/internal/platform/push"
 )
 
 const (
@@ -77,6 +80,19 @@ type Config struct {
 	// decisions, and until APP_LATEST_VERSION names one, nobody is asked.
 	AppLatestVersion string
 	AppAPKURL        string
+
+	// Push reminders through Firebase Cloud Messaging (SPEC.md D-19).
+	//
+	// FCMAccount is FCM_SERVICE_ACCOUNT parsed at boot — the key file the Firebase console
+	// downloads, base64-encoded the way it is pasted into Railway. Nil when unset, and then
+	// no reminder is sent and none is recorded as sent: the API, and a developer machine,
+	// work exactly as before. A key that cannot be read refuses the deploy instead, and
+	// Railway keeps the previous one serving.
+	FCMAccount *push.Credentials
+
+	// NotificationsDebug writes each reminder to the log instead of sending it, so the text
+	// and the recipients can be checked with no Firebase account at all.
+	NotificationsDebug bool
 }
 
 // appVersionPattern is the pubspec's `version:` — three numbers and, optionally, the build
@@ -138,6 +154,8 @@ func Load() (Config, error) {
 		// "v" is the tag's, not the version's, so it is dropped rather than refused.
 		AppLatestVersion: strings.TrimPrefix(strings.TrimSpace(os.Getenv("APP_LATEST_VERSION")), "v"),
 		AppAPKURL:        strings.TrimSpace(os.Getenv("APP_APK_URL")),
+
+		NotificationsDebug: strings.EqualFold(envOr("NOTIFICATIONS_DEBUG", "false"), "true"),
 	}
 
 	switch cfg.AppEnv {
@@ -214,6 +232,15 @@ func Load() (Config, error) {
 		}
 	}
 
+	if raw := strings.TrimSpace(os.Getenv("FCM_SERVICE_ACCOUNT")); raw != "" {
+		account, problem := parseFCMAccount(raw)
+		if problem != "" {
+			problems = append(problems, problem)
+		} else {
+			cfg.FCMAccount = &account
+		}
+	}
+
 	if len(problems) > 0 {
 		return Config{}, fmt.Errorf("invalid configuration:\n  - %s",
 			strings.Join(problems, "\n  - "))
@@ -238,6 +265,28 @@ func checkAPKURL(raw string, production bool) string {
 		return fmt.Sprintf("APP_APK_URL must use https, got %q", raw)
 	}
 	return ""
+}
+
+// parseFCMAccount reads FCM_SERVICE_ACCOUNT, returning what is wrong with it or "".
+//
+// Base64 is what DEPLOY.md tells the owner to paste, because a JSON file full of quotes
+// and newlines does not survive every panel. The raw JSON is accepted too: pasting the
+// file as it came is the obvious mistake, and nothing is gained by refusing it. The
+// problem never repeats the value — it ends up in a deploy log.
+func parseFCMAccount(raw string) (push.Credentials, string) {
+	decoded := []byte(raw)
+	if !strings.HasPrefix(raw, "{") {
+		var err error
+		decoded, err = base64.StdEncoding.DecodeString(raw)
+		if err != nil {
+			return push.Credentials{}, "FCM_SERVICE_ACCOUNT must be the service account JSON, base64-encoded"
+		}
+	}
+	account, err := push.ParseServiceAccount(decoded)
+	if err != nil {
+		return push.Credentials{}, "FCM_SERVICE_ACCOUNT " + err.Error()
+	}
+	return account, ""
 }
 
 // corsDefaultFor picks the default browser origin policy.

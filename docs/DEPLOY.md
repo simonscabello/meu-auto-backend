@@ -94,6 +94,33 @@ segunda é esta variável. Uma versão fora do formato, ou uma versão sem `APP_
 processo recusar subir; como o Railway só encaminha tráfego para o deploy que passa no
 `/healthz`, o anterior continua no ar e o erro fica no log do deploy.
 
+### Lembretes push (SPEC.md D-19)
+
+Os lembretes saem às 9h (horário de Brasília) pelo Firebase Cloud Messaging. As duas
+variáveis são **opcionais**: sem elas a API funciona igual, nenhum lembrete sai e nenhum é
+registrado como enviado — os aparelhos continuam se registrando e passam a receber no dia
+em que a chave existir.
+
+| Variável | Valor | Quando |
+|---|---|---|
+| `FCM_SERVICE_ACCOUNT` | o JSON da conta de serviço do Firebase, **em base64** | Uma vez. Firebase → Configurações do projeto → Contas de serviço → Gerar nova chave privada. É segredo: não vai para o repositório nem para o chat |
+| `NOTIFICATIONS_DEBUG` | `true` | Só para conferir texto e destinatários: o aviso vai para o log em vez de sair. Ganha da chave |
+
+Gerar o base64 no PowerShell, já na área de transferência (ajuste o caminho):
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("$HOME\Downloads\NOME-DO-ARQUIVO.json")) | Set-Clipboard
+```
+
+O JSON cru também é aceito, mas o base64 atravessa qualquer painel sem estragar aspas e
+quebras de linha. Uma chave que não dá para ler faz o processo recusar subir — o deploy
+anterior continua no ar e o motivo fica no log, sem repetir a chave. Com a chave boa, o boot
+loga `push reminders on` com o id do projeto; sem ela, `push reminders are off`.
+
+O app só recebe se o `google-services.json` do mesmo projeto Firebase estiver no
+build (`meu-auto-app/android/app/`). Chave de um projeto e app de outro: o envio é recusado
+e o log diz `fcm: send refused`.
+
 **Não defina `PORT`** — o Railway injeta.
 
 **Não defina `CORS_ORIGINS`.** Em produção o padrão é vazio, que é o correto: o único
